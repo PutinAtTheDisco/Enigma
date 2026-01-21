@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>Enigma</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="header">
+      <h1>Enigma</h1>
+      <div class="stats" id="stats"></div>
+    </header>
+
+    <section class="controls">
+      <div class="controlRow">
+        <div class="controlTitle">Difficulty</div>
+        <div class="controlValue" id="diffLabel">Hard</div>
+      </div>
+      <div class="controlRow">
+        <input id="diff" type="range" min="1" max="5" step="1" value="4" />
+        <div class="controlHint" id="diffHint">More overlap, more purple, more pain.</div>
+      </div>
+    </section>
+
+    <main class="board">
+      <div class="solvedArea" id="solvedArea"></div>
+
+      <div class="grid" id="grid"></div>
+
+      <div class="mistakesRow">
+        <span>Mistakes remaining:</span>
+        <div class="dots" id="dots"></div>
+      </div>
+
+      <div class="btnRow">
+        <button class="btn" id="shuffleBtn">Shuffle</button>
+        <button class="btn" id="deselectBtn">Deselect All</button>
+        <button class="btn" id="submitBtn" disabled>Submit</button>
+      </div>
+
+      <div class="toastWrap"><div class="toast" id="toast"></div></div>
+
+      <div class="footerMini">
+        <span id="hintLine">Select 4 tiles.</span>
+        <div class="miniBtnRow">
+          <button class="miniBtn" id="hintBtn">Hint</button>
+          <button class="miniBtn" id="newBtn">New Puzzle</button>
+          <button class="miniBtn danger" id="resetStatsBtn">Reset Stats</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    // PWA service worker (optional but nice)
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>
