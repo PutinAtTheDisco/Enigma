@@ -1,103 +1,79 @@
-/* hints.js — Enigma hints that actually help (and sometimes roast you). */
-
-(function () {
+(function(){
   "use strict";
 
-  // Expose a single global function: window.enigmaHint(...)
-  window.enigmaHint = function enigmaHint(opts) {
-    const {
-      puzzle,
-      tiles,
-      selectedIds,
-      toast = defaultToast
-    } = opts || {};
+  window.enigmaHint = function(opts){
+    const { puzzle, tiles, selectedIds, toast } = opts || {};
+    const say = toast || ((m)=>alert(m));
 
-    if (!puzzle || !puzzle.groups || !Array.isArray(tiles)) {
-      toast("Hint system can't see the puzzle. Classic.");
+    if(!puzzle || !Array.isArray(puzzle.groups) || !Array.isArray(tiles)){
+      say("Hint system can't see the puzzle. Which is… on brand.");
       return;
     }
 
-    const selectedTiles = [...(selectedIds || [])]
+    const selected = [...(selectedIds || [])]
       .map(id => tiles.find(t => t.id === id))
       .filter(Boolean);
 
-    const remainingTiles = tiles.filter(t => !t.locked);
+    const remaining = tiles.filter(t => !t.locked);
+    const group = (gi) => puzzle.groups[gi];
 
-    const groupOf = (t) => puzzle.groups[t.groupIndex];
+    // 4 selected: check if they are one-away and name the target category
+    if(selected.length === 4){
+      const counts = new Map();
+      for(const t of selected) counts.set(t.groupIndex, (counts.get(t.groupIndex)||0)+1);
 
-    // Helper: counts by groupIndex
-    const countsByGroup = () => {
-      const m = new Map();
-      for (const t of selectedTiles) {
-        m.set(t.groupIndex, (m.get(t.groupIndex) || 0) + 1);
-      }
-      return m;
-    };
-
-    // 4 selected => "one-away" / submit guidance
-    if (selectedTiles.length === 4) {
-      const counts = countsByGroup();
       let bestGi = null, best = 0;
-      for (const [gi, c] of counts.entries()) {
-        if (c > best) { best = c; bestGi = gi; }
+      for(const [gi, c] of counts.entries()){
+        if(c > best){ best = c; bestGi = gi; }
       }
-      if (best === 4) {
-        toast("That's a correct group. Hit submit before you overthink it.");
+
+      if(best === 4){
+        say("That’s a correct group. Submit it before you self-sabotage.");
         return;
       }
-      if (best === 3) {
-        toast(`One away from: ${groupOf({ groupIndex: bestGi }).category}`);
+      if(best === 3){
+        say(`One away from: ${group(bestGi).category}`);
         return;
       }
-      toast("Not one-away. Your selection is basically interpretive dance.");
+      say("Not one-away. Your selection is a poem. Incorrect, but emotional.");
       return;
     }
 
-    // 3 selected => reveal missing word if they are 3/4 correct
-    if (selectedTiles.length === 3) {
-      const gi0 = selectedTiles[0].groupIndex;
-      const same = selectedTiles.every(t => t.groupIndex === gi0);
-      if (same) {
-        const g = puzzle.groups[gi0];
-        const s = new Set(selectedTiles.map(t => t.word));
-        const missing = g.words.find(w => !s.has(w));
-        if (missing) toast(`3/4 of "${g.category}". Missing: ${missing}`);
-        else toast(`3/4 of "${g.category}". You're basically done. Submit.`);
+    // 3 selected: if they are all same group, reveal missing word
+    if(selected.length === 3){
+      const gi = selected[0].groupIndex;
+      const same = selected.every(t => t.groupIndex === gi);
+      if(!same){
+        say("Those 3 aren’t in the same group. Swap one.");
         return;
       }
-      toast("Those 3 aren't from the same group. Swap one tile.");
+      const g = group(gi);
+      const have = new Set(selected.map(t => t.word));
+      const missing = g.words.find(w => !have.has(w));
+      say(missing ? `3/4 of "${g.category}". Missing: ${missing}` : `3/4 of "${g.category}". Submit.`);
       return;
     }
 
-    // 2 selected => say if they match and give category
-    if (selectedTiles.length === 2) {
-      const [a, b] = selectedTiles;
-      if (a.groupIndex === b.groupIndex) {
-        toast(`Those two match: ${groupOf(a).category}`);
-      } else {
-        toast("Those two do not match. Betray one of them.");
-      }
+    // 2 selected: say match or no
+    if(selected.length === 2){
+      const [a,b] = selected;
+      if(a.groupIndex === b.groupIndex) say(`Match: ${group(a.groupIndex).category}`);
+      else say("Those two don’t match. Break up.");
       return;
     }
 
-    // 1 selected => tell category (no full spoiler)
-    if (selectedTiles.length === 1) {
-      const g = groupOf(selectedTiles[0]);
-      toast(`That tile belongs to: ${g.category}`);
+    // 1 selected: reveal category
+    if(selected.length === 1){
+      say(`That tile belongs to: ${group(selected[0].groupIndex).category}`);
       return;
     }
 
-    // 0 selected => give a starter clue (tile + category)
-    if (!remainingTiles.length) {
-      toast("No tiles left to hint. Go touch grass.");
+    // 0 selected: give a starter clue tile + category
+    if(!remaining.length){
+      say("No tiles left. You did it. Or you failed and it ended. Same vibe.");
       return;
     }
-    const t = remainingTiles[Math.floor(Math.random() * remainingTiles.length)];
-    toast(`Starter: "${t.word}" belongs to "${groupOf(t).category}"`);
+    const t = remaining[Math.floor(Math.random() * remaining.length)];
+    say(`Starter: "${t.word}" belongs to "${group(t.groupIndex).category}"`);
   };
-
-  function defaultToast(msg) {
-    // Fallback toast if your app didn't provide one
-    alert(msg);
-  }
 })();
