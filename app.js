@@ -123,9 +123,11 @@ function renderGrid(){
     const d = document.createElement("div");
     d.className = "tile" + (selected.has(t.id) ? " sel" : "");
 
-    // Important: wrap word in span so formatting.css can control it.
-    d.innerHTML = `<span class="tile-word">${escapeHtml(t.word)}</span>`;
+    const span = document.createElement("span");
+    span.className = "tile-word";
+    span.textContent = t.word; // safe rendering
 
+    d.appendChild(span);
     d.onclick = () => toggleSelect(t.id);
     grid.appendChild(d);
   }
@@ -137,15 +139,6 @@ function renderGrid(){
     b.style.visibility = "hidden";
     grid.appendChild(b);
   }
-}
-
-function escapeHtml(s){
-  return String(s)
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
 }
 
 function updateUIState(){
@@ -206,9 +199,7 @@ function submit(){
     updateUIState();
     toast("Correct.");
 
-    if(solved.length === 4){
-      endGame(true);
-    }
+    if(solved.length === 4) endGame(true);
     return;
   }
 
@@ -220,15 +211,12 @@ function submit(){
   updateUIState();
   toast(oneAway ? "One away." : "Nope.");
 
-  if(mistakes >= 4){
-    endGame(false);
-  }
+  if(mistakes >= 4) endGame(false);
 }
 
-// New hint handler uses hints.js
 function hint(){
   if(!window.enigmaHint){
-    toast("Hint engine missing. Add hints.js to index.html.");
+    toast("Hints not loaded. Add hints.js to index.html (with ?v=).");
     return;
   }
   window.enigmaHint({
