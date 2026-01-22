@@ -1,60 +1,45 @@
-/* formatting.css — Enigma tile layout fixes for long words and phones */
+/* formatting.css — Connected! tile overflow + long-word handling */
 
 :root{
-  --tile-pad-y: 12px;
-  --tile-pad-x: 10px;
-  --tile-radius: 18px;
-  --tile-font-min: 12px;
+  --tile-font-min: 11px;
   --tile-font-max: 18px;
-  --tile-line-height: 1.08;
+  --tile-line-height: 1.06;
 }
 
-/* Target common tile class names so you don't have to match perfectly */
-.tile, .cell, .word-tile, .grid button, .grid .tile {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--tile-pad-y) var(--tile-pad-x);
-  border-radius: var(--tile-radius);
-  box-sizing: border-box;
+/* Tile box must be the jail. */
+.tile{
+  overflow: hidden;                 /* IMPORTANT: stops spill-out */
+  min-width: 0;                     /* IMPORTANT for grid children */
 }
 
-/* The word label itself */
-.tile span, .cell span, .word-tile span,
-.tile .tile-word, .cell .tile-word, .word-tile .tile-word,
-.grid button span, .grid .tile span {
+/* The word inside the tile */
+.tile .tile-word{
   display: block;
   width: 100%;
+  max-width: 100%;
   text-align: center;
   line-height: var(--tile-line-height);
 
-  /* Responsive scaling: phone friendly */
-  font-size: clamp(var(--tile-font-min), 3.3vw, var(--tile-font-max));
+  font-size: clamp(var(--tile-font-min), 3.4vw, var(--tile-font-max));
 
-  /* Prevent text escape */
+  /* Wrap ANYTHING, even cursed strings without spaces */
   overflow-wrap: anywhere;
   word-break: break-word;
   hyphens: auto;
+
+  /* If it’s still too long, scale slightly tighter */
+  letter-spacing: -0.2px;
 }
 
-/* Keep the grid stable even when wrapping */
-.grid, .tiles, .board, .tile-grid {
-  align-items: stretch;
+/* If your grid uses flex, this prevents overflow from flex math. */
+#grid, .grid{
+  min-width: 0;
 }
 
-.tile, .cell, .word-tile, .grid button, .grid .tile {
-  min-height: 64px;
-}
-
-/* Super small screens */
+/* Small screens */
 @media (max-width: 360px){
   :root{
-    --tile-font-min: 11px;
+    --tile-font-min: 10px;
     --tile-font-max: 16px;
-    --tile-pad-y: 10px;
-    --tile-pad-x: 8px;
-  }
-  .tile, .cell, .word-tile, .grid button, .grid .tile {
-    min-height: 58px;
   }
 }
