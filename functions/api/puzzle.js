@@ -4,12 +4,11 @@ export async function onRequest(context) {
   const difficulty = clampInt(u.searchParams.get("difficulty"), 1, 5, 4);
 
   const cfg = {
-    // higher = more overlap bait + more cryptic generators
-    overlapChance: [0.12, 0.18, 0.26, 0.36, 0.52][difficulty - 1],
-    crypticChance: [0.10, 0.16, 0.24, 0.34, 0.50][difficulty - 1],
-    decoyHeat:     [0.00, 0.08, 0.14, 0.20, 0.28][difficulty - 1],
-    wikidataChance:[0.10, 0.18, 0.28, 0.38, 0.50][difficulty - 1],
-    rerollMax:     [30,   45,   70,   110,  160][difficulty - 1],
+    overlapChance: [0.18, 0.26, 0.34, 0.44, 0.60][difficulty - 1],
+    crypticChance: [0.16, 0.24, 0.34, 0.46, 0.62][difficulty - 1],
+    decoyHeat:     [0.06, 0.12, 0.18, 0.26, 0.34][difficulty - 1],
+    wikidataChance:[0.14, 0.22, 0.32, 0.42, 0.55][difficulty - 1],
+    rerollMax:     [60,   90,   140,  220,  320][difficulty - 1],
     maxWordLen: 18
   };
 
@@ -55,31 +54,31 @@ function cleanWord(w, maxLen){
   return x;
 }
 
-/* --------------- pools (bigger + nerdier) --------------- */
+/* ---------------- pools: huge variety ---------------- */
 function buildPools(){
   const slang = [
     "RIZZ","YEET","GOATED","SUS","CAP","NO CAP","BET","DRIP","FOMO","IYKYK","COPE","MALD",
     "LOCK IN","DELULU","ATE","SERVE","LOWKEY","HIGHKEY","RATIO","TOUCH GRASS","SWEATY","NAUR",
-    "GASLIGHT","GATEKEEP","GIRLBOSS","SEND IT","COOKED","MID","BASED","CRINGE","SALTY"
+    "COOKED","MID","BASED","CRINGE","SALTY","SEND IT","GASLIGHT","STAN","GLOW UP","ICK"
   ];
 
   const memes = [
-    "RICKROLL","DOGE","PEPE","LOSS","AMOGUS","NPC","SKIBIDI","OHIO","GIGACHAD","THIS IS FINE",
-    "SURPRISED PIKACHU","UNO REVERSE","DISTRACTED BF","OK BOOMER","BRAIN ROT","MAIN CHARACTER"
+    "RICKROLL","DOGE","PEPE","LOSS","AMOGUS","NPC","GIGACHAD","THIS IS FINE","UNO REVERSE",
+    "SURPRISED PIKACHU","OK BOOMER","MAIN CHARACTER","BRAIN ROT","IS THIS A PIGEON","SHEESH"
   ];
 
   const internet = [
     "THREAD","SUBTWEET","DOXX","ALT","LURK","SHADOWBAN","DOGPILE","HOT TAKE","SOFT LAUNCH",
-    "BLOCKLIST","BAIT","COPE","SEETHE","YAPPING","RATIO","MODMAIL","POSTER","KARMA"
+    "BLOCKLIST","BAIT","COPE","SEETHE","YAPPING","MODMAIL","KARMA","REPOST","VIRAL","RATIOED"
   ];
 
-  const games = [
+  const gaming = [
     "RNG","NERF","BUFF","PATCH","SPAWN","AGGRO","DPS","TANK","HEAL","QUEST","LOOT","BOSS","NPC",
     "CRIT","CLUTCH","SPEEDRUN","HITBOX","NOCLIP","GLITCH","META","GRIND","PVP","PVE","RAID",
     "DUNGEON","RESPAWN","AOE"
   ];
 
-  const moviesTv = [
+  const screenwriting = [
     "REBOOT","SEQUEL","PREQUEL","RETCON","CAMEO","SPINOFF","MACGUFFIN","PLOT ARMOR","CLIFFHANGER",
     "MONTAGE","COLD OPEN","POST-CREDITS","CANON","FILLER","EASTER EGG","FORESHADOW","DIRECTOR'S CUT"
   ];
@@ -101,63 +100,83 @@ function buildPools(){
 
   const obscure = [
     "KAKISTOCRACY","ULTRACREPIDARIAN","HIRSUTE","SANGUINE","LIMINAL","GNOMIC","NOETIC","CHTHNIC",
-    "EIDOLON","SINECURE","COZEN","SIBILANT","APORIA","PALINODE","ANEMIC"
+    "EIDOLON","SINECURE","COZEN","SIBILANT","APORIA","PALINODE","ANEMIC","EUTRAPELIA"
+  ];
+
+  const mythology = [
+    "ARES","HADES","ODIN","LOKI","THOR","FREYA","ANUBIS","RA","ATHENA","HERA","MORRIGAN","SET"
+  ];
+
+  const science = [
+    "ION","PLASMA","NEUTRON","PHOTON","ENTROPY","ORBIT","SPECTRUM","FUSION","GRAVITY","VECTOR","GENOME","QUARK"
+  ];
+
+  const music = [
+    "CHORUS","BRIDGE","VERSE","REFRAIN","CODA","TEMPO","KEY","HARMONY","MELODY","LYRIC","OCTAVE","RIFF"
+  ];
+
+  const food = [
+    "UMAMI","SUSHI","RAMEN","TACOS","PANINI","CURRY","BAGEL","MOCHI","BISQUE","SORBET","GUMBO","PAELLA"
   ];
 
   const anatomy = [
     "ARCH","TOE","HEEL","SOLE","ANKLE","CALF","SHIN","KNEE","WRIST","PALM","ELBOW","THUMB","JAW","RIB","HIP","TEMPLE"
   ];
 
-  // “Franchise mixer” pools (these are sources, not categories by themselves)
-  const fandom = {
-    pokemon: ["POKEDEX","POKEBALL","GYM","BADGE","SHINY","STARTER","EVOLVE","LEGENDARY","TYPE","MOVE"],
-    starwars: ["JEDI","SITH","PADAWAN","DROID","LIGHTSABER","HYPERDRIVE","HOLOCRON","WOOKIEE","BLASTER"],
-    marvel: ["VIBRANIUM","VARIANT","MULTIVERSE","INFINITY","AVENGER","VILLAIN","CAMEO","AFTERCREDITS","SNAP"],
-    fantasy: ["MANA","QUEST","DUNGEON","DRAGON","PALADIN","WARLOCK","RANGER","CLERIC","ELIXIR"],
-    minecraft: ["CREEPER","REDSTONE","NETHER","ENDERMAN","ENCHANT","PICKAXE","BIOME","SPAWNER","ELYTRA"]
-  };
-
-  // Overlap bait words that can plausibly fit multiple groups
-  const overlapBait = [
-    "CANON","META","PATCH","BOSS","RUSH","CRUSH","SPRITE","ARC","SHIP","RUNE","MINT","BUNDLE",
-    "GRIND","SPAWN","JADE","IVORY","QUEST","GLITCH","CAMEO"
+  const portmanteaus = [
+    "SPORK","CHILLAX","HANGRY","FRENEMY","BROMANCE","MANSPLAIN","STAYCATION","COSPLAY","SMOG","FANFIC","BLOOPER"
   ];
 
-  // Fill-in-the-blank templates
-  const afterBlanks = [
-    { lead:"DARK", opts:["HORSE","MODE","ROOM","WEB","SIDE","MATTER","STAR","ARTS"] },
-    { lead:"SILVER", opts:["LINING","SCREEN","BULLET","FOX","SPOON","TONGUE"] },
-    { lead:"GHOST", opts:["TOWN","MODE","SHIP","WRITER","LIGHT","HUNT"] },
-    { lead:"FINAL", opts:["BOSS","FORM","CUT","WARNING","FANTASY"] },
-    { lead:"TOUCH", opts:["GRASS","DOWN","BASE","SCREEN"] }
-  ];
-
-  // Homophones / near-homophones for cryptic sets
   const homophones = [
     ["SCENT","SENT"], ["STEAL","STEEL"], ["PLAIN","PLANE"], ["KNIGHT","NIGHT"],
     ["WAIST","WASTE"], ["HOARD","HORDE"]
   ];
 
-  // Hidden-word seeds: we generate answers that contain a hidden substring
-  const hiddenSeeds = ["CAT","RPG","MEL","ARC","SUN","NET","ORE","RUNE"];
-
-  // Portmanteau-ish (fun fake-ish words)
-  const portmanteaus = [
-    "SPORK","CHILLAX","HANGRY","BROMANCE","MANSPLAIN","FRENEMY","STAYCATION","COSPLAY","SMOG","FANFIC"
+  const oneLetterPairs = [
+    ["CANON","CANNON"], ["FORM","FROM"], ["LATER","LATTE"], ["RING","RANG"],
+    ["WILD","WIELD"], ["SCAR","SCARF"]
   ];
 
-  // One-letter-off pairs
-  const oneLetterPairs = [
-    ["CANON","CANNON"], ["FORM","FROM"], ["LATER","LATTE"], ["RING","RANG"]
+  const afterBlanks = [
+    { lead:"DARK", opts:["HORSE","MODE","ROOM","WEB","SIDE","MATTER","STAR","ARTS"] },
+    { lead:"SILVER", opts:["LINING","SCREEN","BULLET","FOX","SPOON","TONGUE"] },
+    { lead:"GHOST", opts:["TOWN","MODE","SHIP","WRITER","LIGHT","HUNT"] },
+    { lead:"FINAL", opts:["BOSS","FORM","CUT","WARNING","FANTASY"] },
+    { lead:"TOUCH", opts:["GRASS","DOWN","BASE","SCREEN"] },
+    { lead:"HIT", opts:["BOX","LIST","MAN","RATE","POINT"] }
+  ];
+
+  const prefixes = ["DARK","NIGHT","STAR","MOON","VOID","NEO","CYBER","MEGA","ULTRA","GIGA","SHADOW","PIXEL","GHOST"];
+  const suffixes = ["CORE","CODE","PUNK","LORD","MANCER","GATE","VIBE","LOCK","WAVE","VERSE","SPAWN","CRAFT","MAXX"];
+
+  // Massive fandom sampler: broad and shallow, but endless combos
+  const fandom = {
+    pokemon: ["POKEDEX","POKEBALL","GYM","BADGE","SHINY","STARTER","EVOLVE","TYPE","MOVE","LEGENDARY"],
+    starwars: ["JEDI","SITH","PADAWAN","DROID","LIGHTSABER","HYPERDRIVE","WOOKIEE","BLASTER","HOLOCRON"],
+    marvel: ["VIBRANIUM","VARIANT","MULTIVERSE","INFINITY","AVENGER","VILLAIN","CAMEO","SNAP","AFTERCREDITS"],
+    minecraft: ["CREEPER","REDSTONE","NETHER","ENDERMAN","ENCHANT","PICKAXE","BIOME","SPAWNER","ELYTRA"],
+    fantasy: ["MANA","QUEST","DUNGEON","DRAGON","PALADIN","WARLOCK","RANGER","CLERIC","ELIXIR"],
+    scifi: ["ANDROID","CYBORG","WARP","HYPERSPACE","ALIEN","CLONE","MECH","NANITE","SINGULARITY"],
+    horror: ["SLASHER","HAUNTED","POSSESSION","PHANTOM","CURSED","NOIR","GORE","CULT","ABYSS"],
+    anime: ["SENPAI","TSUNDERE","KAIJU","SHONEN","ISEKAI","MECHA","CHIBI","YANDERE","DOJIN"],
+    tabletop: ["D20","CRITICAL","INITIATIVE","CAMPAIGN","MINIATURE","DM","ALIGNMENT","HOMEBREW","ONE-SHOT"]
+  };
+
+  // Overlap bait for misdirection
+  const overlapBait = [
+    "CANON","META","PATCH","BOSS","RUSH","CRUSH","SPRITE","ARC","SHIP","RUNE","QUEST","GLITCH",
+    "CAMEO","IVORY","JADE","TEMPO","KEY","RAID"
   ];
 
   return {
-    slang, memes, internet, games, moviesTv, colors, weapons, bigWords, obscure, anatomy,
-    fandom, overlapBait, afterBlanks, homophones, hiddenSeeds, portmanteaus, oneLetterPairs
+    slang, memes, internet, gaming, screenwriting, colors, weapons, bigWords, obscure,
+    mythology, science, music, food, anatomy,
+    portmanteaus, homophones, oneLetterPairs, afterBlanks, prefixes, suffixes,
+    fandom, overlapBait
   };
 }
 
-/* ---------------- wikidata spice (optional) ---------------- */
+/* ---------------- wikidata spice ---------------- */
 async function maybeFetchWikidata(prob, maxLen){
   if(Math.random() > prob) return null;
 
@@ -185,23 +204,24 @@ async function maybeFetchWikidata(prob, maxLen){
     const c = cleanWord(label, maxLen);
     if(c) out.push(c);
   }
-  return uniq(out).slice(0, 60);
+  return uniq(out).slice(0, 70);
 }
 
-/* ---------------- generation core ---------------- */
+/* ---------------- generation ---------------- */
 function generatePuzzle({ cfg, pools, fresh }){
   const baseColors = ["YELLOW","GREEN","BLUE","PURPLE"];
 
   for(let attempt=0; attempt<cfg.rerollMax; attempt++){
     const used = new Set();
     const groups = [];
+
     const gens = buildGenerators({ cfg, pools, fresh });
 
-    // Guarantee at least one cryptic group at higher difficulty
-    groups.push((Math.random() < cfg.crypticChance ? choice(gens.cryptic) : choice(gens.normal))());
+    // Force at least one hard/cryptic group often
+    groups.push((Math.random() < cfg.crypticChance ? choice(gens.cryptic) : choice(gens.hard))());
 
     while(groups.length < 4){
-      const bank = (Math.random() < cfg.crypticChance) ? gens.cryptic : gens.normal;
+      const bank = Math.random() < cfg.crypticChance ? gens.cryptic : gens.hard;
       const g = choice(bank)();
 
       if(groups.some(x => x.category === g.category)) continue;
@@ -212,13 +232,13 @@ function generatePuzzle({ cfg, pools, fresh }){
       groups.push(g);
     }
 
-    if(!isPuzzleSane(groups)) continue;
-
-    // Decoy mechanic: increase “temptation” by ensuring overlaps exist across groups
+    // Heat up overlaps for pain
     if(Math.random() < cfg.decoyHeat){
       heatUpOverlaps(groups, pools, cfg);
       if(!isPuzzleSane(groups)) continue;
     }
+
+    if(!isPuzzleSane(groups)) continue;
 
     const colorMap = shuffleInPlace([...baseColors]);
     groups.forEach((g,i)=> g.color = colorMap[i]);
@@ -234,33 +254,39 @@ function generatePuzzle({ cfg, pools, fresh }){
 }
 
 function buildGenerators({ cfg, pools, fresh }){
-  const normal = [];
+  const hard = [];
   const cryptic = [];
 
-  // Normal buckets
-  normal.push(() => fromPool("SLANG CHECK", pools.slang, cfg, pools));
-  normal.push(() => fromPool("MEME GRAVEYARD", pools.memes, cfg, pools));
-  normal.push(() => fromPool("INTERNET BEHAVIOR", pools.internet, cfg, pools));
-  normal.push(() => fromPool("GAMER DIALECT", pools.games, cfg, pools));
-  normal.push(() => fromPool("MOVIE AND TV TERMS", pools.moviesTv, cfg, pools));
-  normal.push(() => fromPool("NAMED COLORS", pools.colors, cfg, pools));
-  normal.push(() => fromPool("WEAPONS AND BLADES", pools.weapons, cfg, pools));
-  normal.push(() => fromPool("BIG WORD ENERGY", pools.bigWords, cfg, pools));
-  normal.push(() => fromPool("OBSCURE VOCAB", pools.obscure, cfg, pools));
-  normal.push(() => fromFreshOrFallback("FROM THE WILD INTERNET", fresh, pools.overlapBait, cfg, pools));
+  // Hard: big pools, lots of domains, and overlap injections
+  hard.push(() => fromPool("SLANG CHECK", pools.slang, cfg, pools));
+  hard.push(() => fromPool("MEME GRAVEYARD", pools.memes, cfg, pools));
+  hard.push(() => fromPool("INTERNET BEHAVIOR", pools.internet, cfg, pools));
+  hard.push(() => fromPool("GAMER DIALECT", pools.gaming, cfg, pools));
+  hard.push(() => fromPool("SCREENWRITING TRAPS", pools.screenwriting, cfg, pools));
+  hard.push(() => fromPool("NAMED COLORS", pools.colors, cfg, pools));
+  hard.push(() => fromPool("WEAPONS AND BLADES", pools.weapons, cfg, pools));
+  hard.push(() => fromPool("BIG WORD ENERGY", pools.bigWords, cfg, pools));
+  hard.push(() => fromPool("OBSCURE VOCAB", pools.obscure, cfg, pools));
+  hard.push(() => fromPool("MYTHOLOGY NAMES", pools.mythology, cfg, pools));
+  hard.push(() => fromPool("SCIENCE WORDS", pools.science, cfg, pools));
+  hard.push(() => fromPool("MUSIC TERMS", pools.music, cfg, pools));
+  hard.push(() => fromPool("FOOD WORDS", pools.food, cfg, pools));
+  hard.push(() => fromFreshOrFallback("FROM THE WILD INTERNET", fresh, pools.overlapBait, cfg, pools));
 
-  // Franchise Mixer: a category built from multiple fandom pools, but with a coherent theme label
-  normal.push(() => franchiseMixer(pools, cfg));
+  // Hard: fandom blender with endless combinations
+  hard.push(() => fandomMixer(pools, cfg));
 
-  // Cryptic-ish generators
+  // Cryptic: generators that create fresh categories
   cryptic.push(() => addLetterToBodyParts(pools.anatomy));
   cryptic.push(() => wordsAfterBlank(pools.afterBlanks));
+  cryptic.push(() => wordsThatStartWith(pools.prefixes));
+  cryptic.push(() => wordsThatEndWith(pools.suffixes));
   cryptic.push(() => homophonePairs(pools.homophones));
   cryptic.push(() => oneLetterOffPairs(pools.oneLetterPairs));
-  cryptic.push(() => hiddenWordSet(pools.hiddenSeeds, cfg));
   cryptic.push(() => portmanteauSet(pools.portmanteaus, cfg));
+  cryptic.push(() => hiddenSubstringSet(cfg));
 
-  return { normal, cryptic };
+  return { hard, cryptic };
 }
 
 /* ---------------- group builders ---------------- */
@@ -268,7 +294,7 @@ function pickDistinct(pool, n, banned, cfg){
   const src = pool.map(w => cleanWord(w, cfg.maxWordLen)).filter(Boolean);
   const out = [];
   let tries = 0;
-  while(out.length < n && tries < 2500){
+  while(out.length < n && tries < 3000){
     tries++;
     const w = choice(src);
     if(!w) continue;
@@ -310,60 +336,45 @@ function fromFreshOrFallback(category, fresh, fallback, cfg, pools){
   return { category, words };
 }
 
-/* ------------ “All three” features ------------ */
+/* ---------------- the chaos: fandom mixer ---------------- */
+function fandomMixer(pools, cfg){
+  const keys = Object.keys(pools.fandom);
+  shuffleInPlace(keys);
 
-// Franchise Mixer: cross-fandom category that’s still solvable.
-// We pick a theme label and source words from different fandom pools to match it.
-function franchiseMixer(pools, cfg){
-  const themes = [
-    { cat:"MAGICAL TECH WORDS", take:["minecraft","starwars","marvel","pokemon","fantasy"], words:["ENCHANT","HOLOCRON","VIBRANIUM","POKEDEX","MANA"] },
-    { cat:"BOSSES AND LEGENDS", take:["pokemon","minecraft","fantasy","starwars","marvel"], words:["LEGENDARY","ENDER","DRAGON","SITH","VILLAIN"] },
-    { cat:"QUEST-LIKE NOUNS", take:["fantasy","minecraft","pokemon","starwars","marvel"], words:["QUEST","DUNGEON","GYM","JEDI","AVENGER"] }
+  // Pick 4 different fandom buckets to mix
+  const picked = keys.slice(0, 4);
+
+  // Randomized label so it does not repeat much
+  const labelBits = [
+    "FANDOM CROSSOVER", "NERD LORE", "CONVENTION BAIT", "CANON CHAOS",
+    "MULTIVERSE STATIC", "GEEK TRAP", "CROSS-IP VIBES", "LORE TOKENS"
   ];
+  const category = `${choice(labelBits)}: ${picked.map(k => k.toUpperCase()).join(", ")}`;
 
-  // If you want it more chaotic, we can add 30+ of these.
-  // These are “mixer” because they blend vocab across fandoms.
-  const t = choice(themes);
+  // Take 1 word from each fandom pool
+  const words = [];
+  const used = new Set();
+  for(const k of picked){
+    const pool = pools.fandom[k];
+    let w = cleanWord(choice(pool), cfg.maxWordLen);
+    let tries = 0;
+    while((!w || used.has(w)) && tries < 50){
+      tries++;
+      w = cleanWord(choice(pool), cfg.maxWordLen);
+    }
+    if(w){ words.push(w); used.add(w); }
+  }
 
-  const out = t.words.map(w => cleanWord(w, cfg.maxWordLen)).filter(Boolean);
-  // Ensure exactly 4
-  while(out.length > 4) out.pop();
-  while(out.length < 4) out.push(cleanWord(choice(pools.overlapBait), cfg.maxWordLen) || "META");
+  // Ensure exactly 4, fill with overlap bait if needed
+  while(words.length < 4){
+    const fill = cleanWord(choice(pools.overlapBait), cfg.maxWordLen) || "META";
+    if(!used.has(fill)){ words.push(fill); used.add(fill); }
+  }
 
-  return { category: t.cat, words: out.slice(0,4) };
+  return { category, words: words.slice(0,4) };
 }
 
-// Cryptic: homophones
-function homophonePairs(pairs){
-  const picks = shuffleInPlace([...pairs]).slice(0,2).flat().map(upper);
-  return { category:"HOMOPHONE PAIRS", words: picks };
-}
-
-// Cryptic: hidden words (each contains the hidden seed)
-function hiddenWordSet(seeds, cfg){
-  const seed = choice(seeds);
-  const wrappers = [
-    `S${seed}AND`, `C${seed}NAP`, `${seed}ALOG`, `UN${seed}TED`, `B${seed}NUS`, `DE${seed}MO`
-  ].map(w => cleanWord(w, cfg.maxWordLen)).filter(Boolean);
-
-  const words = shuffleInPlace(wrappers).slice(0,4);
-  return { category:`HIDDEN "${seed}" INSIDE`, words };
-}
-
-// Cryptic: portmanteaus
-function portmanteauSet(pool, cfg){
-  const banned = new Set();
-  const words = pickDistinct(pool, 4, banned, cfg);
-  return { category:"PORTMANTEAUS", words };
-}
-
-// Cryptic: one-letter-off pairs
-function oneLetterOffPairs(pairs){
-  const picks = shuffleInPlace([...pairs]).slice(0,2).flat().map(upper);
-  return { category:"ONE-LETTER-OFF PAIRS", words: picks };
-}
-
-// Your beloved cursed body-part mutation
+/* ---------------- cryptic generators ---------------- */
 function addLetterToBodyParts(anatomy){
   const base = shuffleInPlace([...anatomy]).slice(0,4).map(upper);
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -382,18 +393,62 @@ function wordsAfterBlank(afterBlanks){
   return { category:`WORDS AFTER "${b.lead}"`, words: picks };
 }
 
-// Real decoy heat: make 2 different groups share 1 tempting overlap word each (without breaking correctness)
+function wordsThatStartWith(prefixes){
+  const pre = choice(prefixes);
+  const tails = ["MODE","SIDE","WORLD","ROOM","WEB","GATE","LINE","LIGHT","DRIVE","FIELD","PATH"];
+  const words = shuffleInPlace(tails).slice(0,4).map(t => `${pre}${t}`);
+  return { category:`WORDS THAT START WITH "${pre}"`, words };
+}
+
+function wordsThatEndWith(suffixes){
+  const suf = choice(suffixes);
+  const heads = ["STAR","MOON","VOID","NEON","PIXEL","GHOST","DREAM","NIGHT","EMBER","RUNE","CHAOS"];
+  const words = shuffleInPlace(heads).slice(0,4).map(h => `${h}${suf}`);
+  return { category:`WORDS THAT END WITH "${suf}"`, words };
+}
+
+function homophonePairs(pairs){
+  const picks = shuffleInPlace([...pairs]).slice(0,2).flat().map(upper);
+  return { category:"HOMOPHONE PAIRS", words: picks };
+}
+
+function oneLetterOffPairs(pairs){
+  const picks = shuffleInPlace([...pairs]).slice(0,2).flat().map(upper);
+  return { category:"ONE-LETTER-OFF PAIRS", words: picks };
+}
+
+function portmanteauSet(pool, cfg){
+  const banned = new Set();
+  const words = pickDistinct(pool, 4, banned, cfg);
+  return { category:"PORTMANTEAUS", words };
+}
+
+function hiddenSubstringSet(cfg){
+  // Generates fake-ish but solvable hidden-substring categories without a dictionary.
+  const seeds = ["ARC","NET","SUN","RUNE","ORE","CAT","HEX","MOD"];
+  const seed = choice(seeds);
+
+  const shells = [
+    `CA${seed}ON`, `SU${seed}TWEET`, `DE${seed}FEN`, `SH${seed}DOW`, `RE${seed}BOOT`, `IN${seed}ERT`,
+    `MA${seed}IC`, `CO${seed}E`, `RA${seed}ID`, `SP${seed}WN`
+  ];
+
+  const cleaned = uniq(shells.map(s => cleanWord(s, cfg.maxWordLen)).filter(Boolean));
+  shuffleInPlace(cleaned);
+  return { category:`HIDDEN "${seed}" INSIDE`, words: cleaned.slice(0,4) };
+}
+
+/* ---------------- decoy heat ---------------- */
 function heatUpOverlaps(groups, pools, cfg){
   const bait = pools.overlapBait.map(w => cleanWord(w, cfg.maxWordLen)).filter(Boolean);
-  if(bait.length < 4) return;
+  if(bait.length < 6) return;
 
-  // pick two groups and inject one bait word into each, swapping out a non-core word
+  // Inject overlap words into 2 groups to increase temptation without breaking solvability
   const idxs = shuffleInPlace([0,1,2,3]).slice(0,2);
   for(const gi of idxs){
     const g = groups[gi];
     const i = randInt(4);
     const pick = choice(bait);
-    // do not duplicate within group
     if(g.words.includes(pick)) continue;
     g.words[i] = pick;
   }
@@ -405,8 +460,10 @@ function isGroupSane(g, cfg){
   const cleaned = g.words.map(w => cleanWord(w, cfg.maxWordLen)).filter(Boolean);
   if(cleaned.length !== 4) return false;
   if(new Set(cleaned).size !== 4) return false;
+
   const avgLen = cleaned.reduce((a,w)=>a+w.length,0)/4;
   if(avgLen < 3) return false;
+
   g.words = cleaned;
   g.category = String(g.category);
   return true;
@@ -422,7 +479,7 @@ function isPuzzleSane(groups){
 function fallbackPuzzle(){
   const groups = [
     { color:"YELLOW", category:"SLANG CHECK", words:["RIZZ","NO CAP","SUS","YEET"] },
-    { color:"GREEN", category:"MOVIE AND TV TERMS", words:["REBOOT","SEQUEL","RETCON","CAMEO"] },
+    { color:"GREEN", category:"SCREENWRITING TRAPS", words:["REBOOT","SEQUEL","RETCON","CAMEO"] },
     { color:"BLUE", category:"NAMED COLORS", words:["CERULEAN","OCHRE","TEAL","INDIGO"] },
     { color:"PURPLE", category:"ADD A LETTER TO BODY PARTS", words:["KANKLE","TOEZ","HEELO","SOLEN"] }
   ];
@@ -430,4 +487,4 @@ function fallbackPuzzle(){
   groups.forEach((g, gi)=>g.words.forEach(w=>tiles.push({ word:w, groupIndex: gi })));
   shuffleInPlace(tiles);
   return { name:"Enigma", groups, tiles };
-}
+                           }
