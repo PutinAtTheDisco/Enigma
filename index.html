@@ -8,12 +8,17 @@
   <title>Enigma</title>
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&family=Titan+One&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="formatting.css?v=9">
 </head>
 <body>
   <script src="hints.js"></script>
   <div class="wrap">
     <header class="header">
-      <h1>Enigma</h1>
+      <h1 id="gameTitle" class="title">Connected!</h1>
       <div class="stats" id="stats"></div>
     </header>
 
@@ -56,13 +61,14 @@
       </div>
     </main>
   </div>
-
-  <script src="/app.js"></script>
+  
   <script>
     // PWA service worker (optional but nice)
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
+    <script src="app.js?v=9"></script>
+<script src="hints.js?v=9"></script>
   </script>
 </body>
 </html>
