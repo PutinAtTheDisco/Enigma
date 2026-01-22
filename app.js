@@ -42,7 +42,7 @@ function toast(text){
   t.textContent = text;
   t.classList.add("show");
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove("show"), 1200);
+  toast._t = setTimeout(() => t.classList.remove("show"), 1400);
 }
 
 function randInt(n){ return Math.floor(Math.random()*n); }
@@ -122,7 +122,10 @@ function renderGrid(){
   for(const t of remaining){
     const d = document.createElement("div");
     d.className = "tile" + (selected.has(t.id) ? " sel" : "");
-    d.textContent = t.word;
+
+    // Important: wrap word in span so formatting.css can control it.
+    d.innerHTML = `<span class="tile-word">${escapeHtml(t.word)}</span>`;
+
     d.onclick = () => toggleSelect(t.id);
     grid.appendChild(d);
   }
@@ -134,6 +137,15 @@ function renderGrid(){
     b.style.visibility = "hidden";
     grid.appendChild(b);
   }
+}
+
+function escapeHtml(s){
+  return String(s)
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
 }
 
 function updateUIState(){
@@ -213,11 +225,18 @@ function submit(){
   }
 }
 
+// New hint handler uses hints.js
 function hint(){
-  const remaining = tiles.filter(t => !t.locked);
-  if(!remaining.length) return;
-  const pickTile = remaining[randInt(remaining.length)];
-  toast(`Hint: "${pickTile.word}" belongs to a real group.`);
+  if(!window.enigmaHint){
+    toast("Hint engine missing. Add hints.js to index.html.");
+    return;
+  }
+  window.enigmaHint({
+    puzzle,
+    tiles,
+    selectedIds: selected,
+    toast
+  });
 }
 
 function endGame(won){
@@ -233,7 +252,6 @@ function endGame(won){
   saveStats();
 
   if(!won){
-    // Reveal on loss
     solved = [...puzzle.groups];
     renderSolvedBars();
     tiles.forEach(t => t.locked = true);
