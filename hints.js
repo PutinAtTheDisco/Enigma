@@ -1,79 +1,98 @@
-(function(){
-  "use strict";
+// hints.js
+// Uses the solved groups from the puzzle payload (already in app.js as `puzzle.groups`).
+// Returns a human hint that is actually helpful.
 
-  window.enigmaHint = function(opts){
-    const { puzzle, tiles, selectedIds, toast } = opts || {};
-    const say = toast || ((m)=>alert(m));
+export function getHint(puzzle, tiles, solved, difficulty) {
+  const solvedIdx = new Set(solved.map(g => g.category));
+  const remainingGroups = puzzle.groups.filter(g => !solvedIdx.has(g.category));
 
-    if(!puzzle || !Array.isArray(puzzle.groups) || !Array.isArray(tiles)){
-      say("Hint system can't see the puzzle. Which is… on brand.");
-      return;
-    }
+  if (!remainingGroups.length) return "No hints. You already suffered enough.";
 
-    const selected = [...(selectedIds || [])]
-      .map(id => tiles.find(t => t.id === id))
-      .filter(Boolean);
+  // Prefer the hardest remaining group to hint, because cruelty builds character.
+  const g = pick(remainingGroups);
 
-    const remaining = tiles.filter(t => !t.locked);
-    const group = (gi) => puzzle.groups[gi];
+  // Hint styles: category nudge, two-word nudge, pattern nudge
+  const hintStyle = weightedPick([
+    ["categoryNudge", 4],
+    ["twoWordNudge", 4],
+    ["patternNudge", 3],
+    ["eliminate", 2],
+  ]);
 
-    // 4 selected: check if they are one-away and name the target category
-    if(selected.length === 4){
-      const counts = new Map();
-      for(const t of selected) counts.set(t.groupIndex, (counts.get(t.groupIndex)||0)+1);
+  const words = g.words;
 
-      let bestGi = null, best = 0;
-      for(const [gi, c] of counts.entries()){
-        if(c > best){ best = c; bestGi = gi; }
-      }
+  if (hintStyle === "categoryNudge") {
+    return categoryHint(g.category);
+  }
 
-      if(best === 4){
-        say("That’s a correct group. Submit it before you self-sabotage.");
-        return;
-      }
-      if(best === 3){
-        say(`One away from: ${group(bestGi).category}`);
-        return;
-      }
-      say("Not one-away. Your selection is a poem. Incorrect, but emotional.");
-      return;
-    }
+  if (hintStyle === "twoWordNudge") {
+    const w = shuffle([...words]).slice(0, 2);
+    return `Two of the same group: ${w[0]} + ${w[1]}.`;
+  }
 
-    // 3 selected: if they are all same group, reveal missing word
-    if(selected.length === 3){
-      const gi = selected[0].groupIndex;
-      const same = selected.every(t => t.groupIndex === gi);
-      if(!same){
-        say("Those 3 aren’t in the same group. Swap one.");
-        return;
-      }
-      const g = group(gi);
-      const have = new Set(selected.map(t => t.word));
-      const missing = g.words.find(w => !have.has(w));
-      say(missing ? `3/4 of "${g.category}". Missing: ${missing}` : `3/4 of "${g.category}". Submit.`);
-      return;
-    }
+  if (hintStyle === "patternNudge") {
+    return patternHint(g.category, words);
+  }
 
-    // 2 selected: say match or no
-    if(selected.length === 2){
-      const [a,b] = selected;
-      if(a.groupIndex === b.groupIndex) say(`Match: ${group(a.groupIndex).category}`);
-      else say("Those two don’t match. Break up.");
-      return;
-    }
+  if (hintStyle === "eliminate") {
+    // pick a tile not in this group and tell them it’s NOT part of the group
+    const remainingTiles = tiles.filter(t => !t.locked);
+    const notInGroup = remainingTiles.map(t => t.word).filter(w => !words.includes(w));
+    if (notInGroup.length) return `Not in the hinted group: ${pick(notInGroup)}.`;
+    return categoryHint(g.category);
+  }
 
-    // 1 selected: reveal category
-    if(selected.length === 1){
-      say(`That tile belongs to: ${group(selected[0].groupIndex).category}`);
-      return;
-    }
+  return categoryHint(g.category);
+}
 
-    // 0 selected: give a starter clue tile + category
-    if(!remaining.length){
-      say("No tiles left. You did it. Or you failed and it ended. Same vibe.");
-      return;
-    }
-    const t = remaining[Math.floor(Math.random() * remaining.length)];
-    say(`Starter: "${t.word}" belongs to "${group(t.groupIndex).category}"`);
-  };
-})();
+function categoryHint(category) {
+  const c = category.toUpperCase();
+
+  if (c.includes("HOMOPHONE")) return "Listen, don’t look: same sound, different spelling.";
+  if (c.includes("PORTMANTEAU")) return "Two words smashed together into one.";
+  if (c.includes("START WITH \"MEGA\"")) return "All four start with the same prefix.";
+  if (c.includes("WORDS AFTER \"QUICK\"")) return "Think common phrases. QUICK ____.";
+  if (c.includes("FANDOM CROSSOVER")) return "These are from different fandom worlds. Nerd brain required.";
+  if (c.includes("WEAPONS")) return "Pointy, slashy, historically problematic objects.";
+  if (c.includes("SLANG")) return "Words that make older people tired.";
+  if (c.includes("MINECRAFT")) return "Block game terminology. Yes, that one.";
+  if (c.includes("POK")) return "Pocket monsters. Creature names and related terms.";
+  if (c.includes("STAR WARS")) return "Space wizards with laser swords.";
+  if (c.includes("MARVEL")) return "Superhero universe terms.";
+  if (c.includes("WORDS THAT MAKE YOU FEEL INADEQUATE")) return "Fancy vocabulary. Pretend you’re in a thesis defense.";
+
+  return `Category clue: ${titleCase(c)}.`;
+}
+
+function patternHint(category, words) {
+  const c = category.toUpperCase();
+  if (c.includes("MEGA")) return `All four literally start with MEGA.`;
+  if (c.includes("QUICK")) return `All four can follow QUICK.`;
+  if (c.includes("HOMOPHONE")) return `Two pairs: same pronunciation, different spelling.`;
+  // fallback: give the shortest shared feature (first letter)
+  const first = words[0][0];
+  const allSameFirst = words.every(w => w[0] === first);
+  if (allSameFirst) return `They all start with "${first}".`;
+  return "Look for a hidden rule: prefix, sound, or theme.";
+}
+
+function pick(a){ return a[Math.floor(Math.random()*a.length)]; }
+function shuffle(a){
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
+}
+function weightedPick(entries){
+  const total = entries.reduce((s, [,w]) => s+w, 0);
+  let r = Math.random()*total;
+  for(const [k,w] of entries){
+    r -= w;
+    if(r<=0) return k;
+  }
+  return entries[0][0];
+}
+function titleCase(s){
+  return s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
