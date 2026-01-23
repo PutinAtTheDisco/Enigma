@@ -1,98 +1,108 @@
-// hints.js
-// Uses the solved groups from the puzzle payload (already in app.js as `puzzle.groups`).
-// Returns a human hint that is actually helpful.
+// hints.js — smarter hints for Connected!
+// Export: getHint(puzzle, tiles, solved, difficulty)
+// Always stays logically correct because it uses the actual puzzle groups.
 
-export function getHint(puzzle, tiles, solved, difficulty) {
-  const solvedIdx = new Set(solved.map(g => g.category));
-  const remainingGroups = puzzle.groups.filter(g => !solvedIdx.has(g.category));
+const VAGUE_WORDS = new Set(["THE","A","AN","OF","AND","TO","IN","ON","FOR","WITH"]);
 
-  if (!remainingGroups.length) return "No hints. You already suffered enough.";
+function maskCategory(cat, difficulty){
+  const s = String(cat || "").trim();
+  if(!s) return "…";
+  if(difficulty <= 2) return s;
 
-  // Prefer the hardest remaining group to hint, because cruelty builds character.
-  const g = pick(remainingGroups);
-
-  // Hint styles: category nudge, two-word nudge, pattern nudge
-  const hintStyle = weightedPick([
-    ["categoryNudge", 4],
-    ["twoWordNudge", 4],
-    ["patternNudge", 3],
-    ["eliminate", 2],
-  ]);
-
-  const words = g.words;
-
-  if (hintStyle === "categoryNudge") {
-    return categoryHint(g.category);
+  // Harder: obscure it without becoming useless
+  if(difficulty === 3){
+    // remove vowels
+    return s.replace(/[AEIOU]/gi, "•");
   }
-
-  if (hintStyle === "twoWordNudge") {
-    const w = shuffle([...words]).slice(0, 2);
-    return `Two of the same group: ${w[0]} + ${w[1]}.`;
+  if(difficulty === 4){
+    // keep first letters of words
+    return s.split(/\s+/).map(w => w[0] ? (w[0].toUpperCase() + "…") : "").join(" ");
   }
-
-  if (hintStyle === "patternNudge") {
-    return patternHint(g.category, words);
-  }
-
-  if (hintStyle === "eliminate") {
-    // pick a tile not in this group and tell them it’s NOT part of the group
-    const remainingTiles = tiles.filter(t => !t.locked);
-    const notInGroup = remainingTiles.map(t => t.word).filter(w => !words.includes(w));
-    if (notInGroup.length) return `Not in the hinted group: ${pick(notInGroup)}.`;
-    return categoryHint(g.category);
-  }
-
-  return categoryHint(g.category);
+  // Brutal: give a “theme vibe” instead of title
+  const tokens = s.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t && !VAGUE_WORDS.has(t));
+  if(tokens.length) return `Theme includes: ${tokens.slice(0,2).join(", ")}`;
+  return "Theme is… a concept.";
 }
 
-function categoryHint(category) {
-  const c = category.toUpperCase();
-
-  if (c.includes("HOMOPHONE")) return "Listen, don’t look: same sound, different spelling.";
-  if (c.includes("PORTMANTEAU")) return "Two words smashed together into one.";
-  if (c.includes("START WITH \"MEGA\"")) return "All four start with the same prefix.";
-  if (c.includes("WORDS AFTER \"QUICK\"")) return "Think common phrases. QUICK ____.";
-  if (c.includes("FANDOM CROSSOVER")) return "These are from different fandom worlds. Nerd brain required.";
-  if (c.includes("WEAPONS")) return "Pointy, slashy, historically problematic objects.";
-  if (c.includes("SLANG")) return "Words that make older people tired.";
-  if (c.includes("MINECRAFT")) return "Block game terminology. Yes, that one.";
-  if (c.includes("POK")) return "Pocket monsters. Creature names and related terms.";
-  if (c.includes("STAR WARS")) return "Space wizards with laser swords.";
-  if (c.includes("MARVEL")) return "Superhero universe terms.";
-  if (c.includes("WORDS THAT MAKE YOU FEEL INADEQUATE")) return "Fancy vocabulary. Pretend you’re in a thesis defense.";
-
-  return `Category clue: ${titleCase(c)}.`;
+function groupStillInPlay(group, tiles){
+  const remainingWords = new Set(tiles.filter(t => !t.locked).map(t => t.word));
+  return group.words.some(w => remainingWords.has(String(w).toUpperCase()));
 }
 
-function patternHint(category, words) {
-  const c = category.toUpperCase();
-  if (c.includes("MEGA")) return `All four literally start with MEGA.`;
-  if (c.includes("QUICK")) return `All four can follow QUICK.`;
-  if (c.includes("HOMOPHONE")) return `Two pairs: same pronunciation, different spelling.`;
-  // fallback: give the shortest shared feature (first letter)
-  const first = words[0][0];
-  const allSameFirst = words.every(w => w[0] === first);
-  if (allSameFirst) return `They all start with "${first}".`;
-  return "Look for a hidden rule: prefix, sound, or theme.";
+function pickUnsolvedGroup(puzzle, tiles, solved){
+  const solvedSet = new Set(solved.map(g => g.category));
+  const candidates = puzzle.groups.filter(g => !solvedSet.has(g.category) && groupStillInPlay(g, tiles));
+  if(!candidates.length) return null;
+  return candidates[Math.floor(Math.random()*candidates.length)];
 }
 
-function pick(a){ return a[Math.floor(Math.random()*a.length)]; }
-function shuffle(a){
-  for(let i=a.length-1;i>0;i--){
-    const j = Math.floor(Math.random()*(i+1));
-    [a[i],a[j]]=[a[j],a[i]];
+function wordsForGroupInRemaining(group, tiles){
+  const remaining = new Set(tiles.filter(t => !t.locked).map(t => t.word));
+  return group.words.map(w => String(w).toUpperCase()).filter(w => remaining.has(w));
+}
+
+function analyzeSelection(puzzle, tiles, selectedIds){
+  const picks = [...selectedIds].map(id => tiles.find(t => t.id === id)).filter(Boolean);
+  if(picks.length === 0) return null;
+
+  const counts = new Map();
+  for(const p of picks){
+    counts.set(p.groupIndex, (counts.get(p.groupIndex) || 0) + 1);
   }
-  return a;
-}
-function weightedPick(entries){
-  const total = entries.reduce((s, [,w]) => s+w, 0);
-  let r = Math.random()*total;
-  for(const [k,w] of entries){
-    r -= w;
-    if(r<=0) return k;
+  let bestGI = null;
+  let bestCount = 0;
+  for(const [gi, c] of counts.entries()){
+    if(c > bestCount){
+      bestCount = c;
+      bestGI = gi;
+    }
   }
-  return entries[0][0];
+  return { picks, bestGI, bestCount };
 }
-function titleCase(s){
-  return s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
+export function getHint(puzzle, tiles, solved, difficulty, selected = new Set()){
+  // If user has selected 3: tell them if those 3 are “tight” (same group) or not.
+  // This is the most useful hint for actual gameplay.
+  if(selected && selected.size === 3){
+    const a = analyzeSelection(puzzle, tiles, selected);
+    if(!a) return "Select tiles first. Yes, that’s how games work.";
+    const grp = puzzle.groups[a.bestGI];
+    if(a.bestCount === 3){
+      // confirm + nudge
+      const remaining = wordsForGroupInRemaining(grp, tiles);
+      const missing = remaining.filter(w => !a.picks.some(p => p.word === w));
+      if(missing.length){
+        return `You’re one away. The missing tile is one of: ${missing.slice(0,2).join(" / ")}.`;
+      }
+      return `You’re one away. Stop overthinking.`;
+    }
+    return `Those 3 don’t belong together. Try swapping one.`;
+  }
+
+  // Otherwise: give a clue toward a real unsolved group.
+  const grp = pickUnsolvedGroup(puzzle, tiles, solved);
+  if(!grp) return "No hints left. You have achieved… completion.";
+
+  const remaining = wordsForGroupInRemaining(grp, tiles);
+  if(remaining.length === 0) return "Hint engine found an empty group. That’s… impressive.";
+
+  // Difficulty affects how direct we are.
+  if(difficulty <= 2){
+    // basically tells you the group
+    return `Category: ${grp.category}. Find: ${remaining.slice(0,2).join(", ")} + two more.`;
+  }
+
+  if(difficulty === 3){
+    return `Clue: ${maskCategory(grp.category, difficulty)}. Two tiles are: ${remaining.slice(0,2).join(" + ")}.`;
+  }
+
+  if(difficulty === 4){
+    // hard but useful: two members + partial category
+    const pick = remaining.slice(0,2);
+    return `Two go together: ${pick.join(" + ")}. Theme: ${maskCategory(grp.category, difficulty)}.`;
+  }
+
+  // Brutal: one member + vibe clue (still grounded)
+  const one = remaining[Math.floor(Math.random()*remaining.length)];
+  return `Start here: ${one}. ${maskCategory(grp.category, difficulty)}.`;
 }
