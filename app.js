@@ -54,7 +54,7 @@ function shuffleInPlace(a){
   return a;
 }
 
-let difficulty = store.get("en_diff", 4);
+let difficulty = store.get("en_diff", 5);
 
 function setDifficultyUI(){
   el("diff").value = difficulty;
@@ -125,7 +125,7 @@ function renderGrid(){
 
     const span = document.createElement("span");
     span.className = "tile-word";
-    span.textContent = t.word; // safe rendering
+    span.textContent = t.word;
 
     d.appendChild(span);
     d.onclick = () => toggleSelect(t.id);
@@ -172,14 +172,16 @@ function shuffleTiles(){
   updateUIState();
 }
 
-function oneAwayCheck(picks){
+function oneAwayInfo(picks){
   const counts = new Map();
   for(const p of picks){
     counts.set(p.groupIndex, (counts.get(p.groupIndex) || 0) + 1);
   }
-  let best = 0;
-  for(const v of counts.values()) best = Math.max(best, v);
-  return best === 3;
+  let bestGi = null, best = 0;
+  for(const [gi, c] of counts.entries()){
+    if(c > best){ best = c; bestGi = gi; }
+  }
+  return { best, bestGi };
 }
 
 function submit(){
@@ -203,28 +205,67 @@ function submit(){
     return;
   }
 
-  const oneAway = oneAwayCheck(picks);
+  const { best } = oneAwayInfo(picks);
   mistakes++;
   selected.clear();
   renderDots();
   renderGrid();
   updateUIState();
-  toast(oneAway ? "One away." : "Nope.");
+  toast(best === 3 ? "One away." : "Nope.");
 
   if(mistakes >= 4) endGame(false);
 }
 
 function hint(){
-  if(!window.enigmaHint){
-    toast("Hints not loaded. Add hints.js to index.html (with ?v=).");
+  if(!puzzle || !puzzle.groups) return;
+
+  const picks = [...selected].map(id => tiles.find(t => t.id === id)).filter(Boolean);
+
+  if(picks.length === 1){
+    const g = puzzle.groups[picks[0].groupIndex];
+    toast(`"${picks[0].word}" belongs to: ${g.category}`);
     return;
   }
-  window.enigmaHint({
-    puzzle,
-    tiles,
-    selectedIds: selected,
-    toast
-  });
+
+  if(picks.length === 2){
+    const [a,b] = picks;
+    if(a.groupIndex === b.groupIndex){
+      toast(`Match: ${puzzle.groups[a.groupIndex].category}`);
+    }else{
+      toast("Those two do not match.");
+    }
+    return;
+  }
+
+  if(picks.length === 3){
+    const gi = picks[0].groupIndex;
+    const same = picks.every(p => p.groupIndex === gi);
+    if(!same){
+      toast("Not the same group. Swap one.");
+      return;
+    }
+    const g = puzzle.groups[gi];
+    const have = new Set(picks.map(p => p.word));
+    const missing = g.words.find(w => !have.has(w));
+    toast(missing ? `3/4 of "${g.category}". Missing: ${missing}` : `3/4 of "${g.category}".`);
+    return;
+  }
+
+  if(picks.length === 4){
+    const { best, bestGi } = oneAwayInfo(picks);
+    if(best === 3){
+      toast(`One away from: ${puzzle.groups[bestGi].category}`);
+    }else{
+      toast("Not one-away. Try pain with better choices.");
+    }
+    return;
+  }
+
+  // none selected: give a starter clue tile + category
+  const remaining = tiles.filter(t => !t.locked);
+  if(!remaining.length) return;
+  const t = remaining[randInt(remaining.length)];
+  toast(`Starter: "${t.word}" belongs to "${puzzle.groups[t.groupIndex].category}"`);
 }
 
 function endGame(won){
@@ -251,7 +292,7 @@ function endGame(won){
 
 async function fetchPuzzle(){
   toast("Summoning fresh suffering...");
-  const url = `/api/puzzle?difficulty=${encodeURIComponent(difficulty)}`;
+  const url = `/api/puzzle?difficulty=${encodeURIComponent(difficulty)}&v=${Date.now()}`;
 
   const res = await fetch(url, { cache: "no-store" });
   if(!res.ok) throw new Error(`API error: ${res.status}`);
