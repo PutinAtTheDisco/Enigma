@@ -1,18 +1,27 @@
 // functions/api/puzzle.js
 export async function onRequest(context) {
-  const { request } = context;
-  const u = new URL(request.url);
-  const difficulty = clampInt(u.searchParams.get("difficulty"), 1, 5, 5);
+  try {
+    const url = new URL(context.request.url);
+    const difficulty = clampInt(url.searchParams.get("difficulty"), 1, 5, 4);
 
-  const puzzle = buildPuzzle(difficulty);
-  return json(puzzle);
-}
+    const puzzle = buildPuzzle(difficulty);
 
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
+    return new Response(JSON.stringify(puzzle), {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({
+      ok: false,
+      error: String(err?.message || err),
+    }), {
+      status: 500,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
 }
 
 function clampInt(v, min, max, fallback) {
@@ -22,7 +31,7 @@ function clampInt(v, min, max, fallback) {
 }
 
 function randInt(n) { return Math.floor(Math.random() * n); }
-function pick(arr) { return arr[randInt(arr.length)]; }
+function pick(a) { return a[randInt(a.length)]; }
 function shuffle(a) {
   for (let i = a.length - 1; i > 0; i--) {
     const j = randInt(i + 1);
@@ -36,256 +45,238 @@ function uniq(arr) {
   for (const x of arr) if (!s.has(x)) { s.add(x); out.push(x); }
   return out;
 }
+function upperWords(ws){ return ws.map(w => String(w).trim().toUpperCase()); }
 
-const COLORS = ["YELLOW", "GREEN", "BLUE", "PURPLE"];
+const COLORS = ["YELLOW","GREEN","BLUE","PURPLE"];
 
-// ---------- Core word banks (expand anytime) ----------
+// -----------------------------
+// BIG BANKS (variety + fandoms)
+// -----------------------------
 const BANK = {
-  // Pop culture / nerd bait
-  MARVEL: ["AVENGER","VIBRANIUM","MJOLNIR","SNAP","MULTIVERSE","ASGARD","WAKANDA","THANOS","LOKI","SPIDEY"],
-  STARWARS: ["JEDI","SITH","PADAWAN","DROID","WOOKIEE","HOLOCRON","LIGHTSABER","HYPERDRIVE","TATOOINE","ENDOR"],
-  POKEMON: ["EEVEE","MEWTWO","GENGAR","LUCARIO","SNORLAX","DITTO","PSYDUCK","CHARIZARD","JIGGLYPUFF","PIKACHU"],
-  MINECRAFT: ["NETHER","ENDER","REDSTONE","CREEPER","STRIDER","ELYTRA","SPAWNER","ANVIL","BEACON","WITHER"],
-  GAMING: ["NPC","NERF","BUFF","HEAL","DPS","RAID","LOOT","GLITCH","PATCH","LAG","SPAWN","SPEEDRUN"],
-
-  // Slang / internet
-  SLANG: ["RIZZ","SUS","YEET","NO CAP","BASED","CRINGE","COPE","LURK","BAIT","GASLIGHT","RATIO","SUBTWEET","SHADOWBAN"],
-
-  // Real vocab: spicy but real
-  HARDWORDS: ["PERNICIOUS","OBFUSCATE","PANEGYRIC","ABSTRUSE","MENDACIOUS","DEFENESTRATE","PERSPICACIOUS","ANTEDILUVIAN","SANGUINE","LUGUBRIOUS"],
-
-  // Weapons etc
-  WEAPONS: ["KATANA","CUTLASS","RAPIER","SABER","LONGBOW","SPEAR","NUNCHAKU","HALBERD","WARHAMMER","DAGGER"],
-
-  // Colors / vibes
-  COLORS: ["IVORY","JADE","MAUVE","OCHRE","UMBER","CERULEAN","INDIGO","MAGENTA","VIRIDIAN","SAFFRON"],
+  SLANG: [
+    "RIZZ","SUS","YEET","NO CAP","BASED","CRINGE","COPE","LURK","BAIT","RATIO","SUBTWEET","SHADOWBAN","FYP","IYKYK",
+    "MID","GLOWUP","STAN","MAIN CHARACTER","DEADASS","GASLIGHT","SOFT LAUNCH","HARD LAUNCH","SIMP","W","L"
+  ],
+  GAMING: [
+    "NPC","DPS","RAID","LOOT","PATCH","NERF","BUFF","SPAWN","GLITCH","SPEEDRUN","HITBOX","AGGRO","COOLDOWN","AOE","RNG","META"
+  ],
+  MINECRAFT: [
+    "NETHER","ENDER","REDSTONE","CREEPER","ELYTRA","BEACON","WITHER","SPAWNER","ANVIL","VILLAGER","ENCHANT","OBSIDIAN","STRIDER"
+  ],
+  POKEMON: [
+    "PIKACHU","DITTO","EEVEE","MEWTWO","GENGAR","LUCARIO","SNORLAX","PSYDUCK","CHARIZARD","JIGGLYPUFF","POKEDEX"
+  ],
+  MARVEL: [
+    "AVENGER","WAKANDA","ASGARD","VIBRANIUM","MULTIVERSE","MJOLNIR","THANOS","LOKI","SPIDEY","INFINITY"
+  ],
+  STARWARS: [
+    "JEDI","SITH","PADAWAN","DROID","WOOKIEE","LIGHTSABER","HYPERDRIVE","TATOOINE","ENDOR","HOLOCRON"
+  ],
+  HORROR: [
+    "SLASHER","FINAL GIRL","JUMPSCARE","HAUNTED","POSSESSED","POLTERGEIST","NOSFERATU","LYCANTHROPE","BANSHEE","WENDIGO"
+  ],
+  WEAPONS: [
+    "KATANA","CUTLASS","RAPIER","SABER","HALBERD","WARHAMMER","NUNCHAKU","DAGGER","SPEAR","LONGBOW"
+  ],
+  COLORS: [
+    "IVORY","JADE","MAUVE","OCHRE","UMBER","CERULEAN","INDIGO","MAGENTA","VIRIDIAN","SAFFRON","ONYX","AZURE"
+  ],
+  BIGWORDS: [
+    "PERNICIOUS","OBFUSCATE","ABSTRUSE","MENDACIOUS","PERSPICACIOUS","ANTEDILUVIAN","LUGUBRIOUS","SANGUINE","RECALCITRANT","INSOUCIANT"
+  ],
+  INTERNET: [
+    "THREAD","HOT TAKE","REPLY GUY","DOOMSCROLL","ALGORITHM","CLICKBAIT","PAYWALL","VIRAL","MEME","PASTA","RAGEQUIT"
+  ],
+  TV_MOVIE: [
+    "CAMEO","REBOOT","SEQUEL","SPINOFF","CANON","RETCON","MONTAGE","CLIFFHANGER","CREDITS","TRAILER"
+  ],
 };
 
-// Homophone pairs: real pairs only.
-const HOMOPHONE_PAIRS = [
-  ["WAIST","WASTE"],
-  ["SCENT","SENT"],
-  ["ARC","ARK"],
-  ["SOUL","SOLE"],
+// Real homophone PAIRS (we only use 2 pairs per category, not a random soup)
+const HOMO_PAIRS = [
   ["PLAIN","PLANE"],
-  ["KNIGHT","NIGHT"],
+  ["SCENT","SENT"],
+  ["WAIST","WASTE"],
+  ["SOUL","SOLE"],
   ["STEEL","STEAL"],
-  ["PALE","Pail"], // careful: casing fixed below
-  ["WEAK","WEEK"],
+  ["KNIGHT","NIGHT"],
   ["STAIR","STARE"],
-].map(([a,b]) => [String(a).toUpperCase(), String(b).toUpperCase()]);
+  ["WEAK","WEEK"],
+  ["SIGHT","SITE"],
+  ["ROLE","ROLL"],
+].map(([a,b]) => [a.toUpperCase(), b.toUpperCase()]);
 
-// Portmanteaus: real-ish common blends
+// Portmanteaus (real/common)
 const PORTMANTEAUS = [
-  "MANSPLAIN","STAYCATION","CHILLAX","BRUNCH","SPORK","SMOG","FANFIC","SEXTORTION","COSPLAY","EDUTAINMENT",
+  "BRUNCH","CHILLAX","STAYCATION","MANSPLAIN","SPORK","SMOG","COSPLAY","EDUTAINMENT","INFOMERCIAL","HANGRY","BROMANCE","FANFIC"
 ].map(x => x.toUpperCase());
 
-// “Fake but declared” blends we allow ONLY when category says so
-const FAKE_BLEND_BASES = [
-  ["ANKLE","KNEE"], ["TOE","KNEE"], ["FOOT","ELBOW"], ["DORK","WIZARD"], ["MOON","MINE"], ["PIXEL","CRAFT"],
+// Prefix/suffix pools (clean patterns)
+const MEGA_WORDS = [
+  "MEGAPHONE","MEGABYTE","MEGACITY","MEGASTORE","MEGAPLEX","MEGATON","MEGASTAR","MEGAMALL","MEGADETH","MEGAFAN"
+].map(x => x.toUpperCase());
+
+const AFTER_QUICK = ["FIX","SAND","SILVER","STUDY","DRAW","CHANGE","STEP","FIRE"].map(x=>x.toUpperCase());
+
+// Safe “fake words” (category admits it)
+const FAKE_BASES = [
+  ["ANKLE","KNEE"],["TOE","ANKLE"],["FOOT","KNEE"],["MOON","MINE"],["PIXEL","CRAFT"],["DRAMA","LLAMA"],["GOBLIN","VIBES"],
+  ["CHAOS","COFFEE"],["DOOM","SCROLL"],["WIZARD","LIZARD"]
 ];
 
-// Prefix category: ensure real-ish words (no “MEGAROOM” nonsense)
-const MEGA_WORDS = [
-  "MEGAPHONE","MEGABYTE","MEGASTAR","MEGACITY","MEGATON","MEGAPLEX","MEGASTORE","MEGADETH","MEGAFAN","MEGAMALL"
-].map(x => x.toUpperCase());
-
-// ---------- Category factories ----------
-function makeHomophoneCategory() {
-  // choose 2 distinct pairs => 4 words
-  const pairs = shuffle([...HOMOPHONE_PAIRS]).slice(0, 2);
-  const words = [pairs[0][0], pairs[0][1], pairs[1][0], pairs[1][1]].map(w => w.toUpperCase());
+// -----------------------------
+// CATEGORY FACTORIES (STRICT)
+// -----------------------------
+function catHomophones() {
+  const pairs = shuffle([...HOMO_PAIRS]).slice(0, 2);
+  const words = upperWords([pairs[0][0], pairs[0][1], pairs[1][0], pairs[1][1]]);
   return {
-    type: "fixed",
+    kind: "homophones",
     category: "HOMOPHONE PAIRS",
     words,
+    validator: (w) => words.includes(w) // locked set
   };
 }
 
-function makePortmanteauCategory() {
+function catPortmanteaus() {
   const words = shuffle([...PORTMANTEAUS]).slice(0, 4);
-  return { type: "fixed", category: "PORTMANTEAUS", words };
+  return { kind:"portmanteau", category:"PORTMANTEAUS", words };
 }
 
-function makeMegaCategory() {
+function catMega() {
   const words = shuffle([...MEGA_WORDS]).slice(0, 4);
-  return { type: "prefix", category: 'WORDS THAT START WITH "MEGA"', words, validator: (w)=>w.startsWith("MEGA") };
+  return { kind:"prefix", category:'WORDS THAT START WITH "MEGA"', words, validator:(w)=>w.startsWith("MEGA") };
 }
 
-function makeFandomCrossoverCategory() {
-  // pick 4 fandom banks, then 1 iconic term from each
-  const options = [
+function catAfterQuick() {
+  const words = shuffle([...AFTER_QUICK]).slice(0,4);
+  return { kind:"phrase", category:'WORDS AFTER "QUICK"', words, validator:(w)=>AFTER_QUICK.includes(w) };
+}
+
+function catBank() {
+  const entries = Object.entries(BANK);
+  const [key, list] = pick(entries);
+  const words = shuffle([...list]).slice(0, 4).map(w => String(w).toUpperCase());
+  const title = ({
+    SLANG:"INTERNET SLANG",
+    GAMING:"GAMING TERMS",
+    MINECRAFT:"MINECRAFT TERMS",
+    POKEMON:"POKÉMON TERMS",
+    MARVEL:"MARVEL TERMS",
+    STARWARS:"STAR WARS TERMS",
+    HORROR:"HORROR TERMS",
+    WEAPONS:"WEAPONS",
+    COLORS:"COLOR WORDS",
+    BIGWORDS:"WORDS THAT MAKE YOU FEEL INADEQUATE",
+    INTERNET:"ONLINE LIFE",
+    TV_MOVIE:"TV/MOVIE TERMS",
+  })[key] || key;
+  return { kind:"bank", category:title, words };
+}
+
+function blend(a,b) {
+  const A = a.toUpperCase();
+  const B = b.toUpperCase();
+  const aPart = A.slice(0, Math.min(3, Math.max(2, Math.floor(A.length/2))));
+  const bPart = B.slice(Math.max(0, B.length - 4));
+  return (aPart + bPart).replace(/\s+/g,"");
+}
+
+function catFakeButDeclared() {
+  const picks = shuffle([...FAKE_BASES]).slice(0,4);
+  const words = picks.map(([a,b]) => blend(a,b)).map(w => w.toUpperCase());
+  return { kind:"fake", category:"FAKE WORDS THAT SOUND PLAUSIBLE", words };
+}
+
+function catFandomCrossover() {
+  const sources = [
     ["MARVEL","MARVEL"],
     ["STAR WARS","STARWARS"],
     ["POKÉMON","POKEMON"],
     ["MINECRAFT","MINECRAFT"],
     ["GAMING","GAMING"],
-    ["INTERNET SLANG","SLANG"],
+    ["INTERNET","INTERNET"],
+    ["SLANG","SLANG"],
+    ["TV/MOVIE","TV_MOVIE"],
+    ["HORROR","HORROR"],
   ];
-  shuffle(options);
-  const chosen = options.slice(0, 4);
+  shuffle(sources);
+  const chosen = sources.slice(0,4);
   const words = chosen.map(([_, key]) => pick(BANK[key]).toUpperCase());
   const label = `FANDOM CROSSOVER: ${chosen.map(([name]) => name).join(", ")}`;
-  return { type: "fixed", category: label, words };
+  return { kind:"crossover", category:label, words };
 }
 
-function makeBankCategory() {
-  // pick a bank and take 4
-  const entries = Object.entries(BANK);
-  const [key, arr] = pick(entries);
-  const words = shuffle([...arr]).slice(0, 4).map(w => String(w).toUpperCase());
-  const nice = {
-    MARVEL: "MARVEL TERMS",
-    STARWARS: "STAR WARS TERMS",
-    POKEMON: "POKÉMON TERMS",
-    MINECRAFT: "MINECRAFT TERMS",
-    GAMING: "GAMING TERMS",
-    SLANG: "INTERNET SLANG",
-    HARDWORDS: "HIGH-LEVEL VOCAB",
-    WEAPONS: "WEAPONS",
-    COLORS: "COLOR WORDS",
-  }[key] || `CATEGORY: ${key}`;
-  return { type: "fixed", category: nice, words };
-}
-
-function makeFakeButDeclaredCategory() {
-  // Build 4 fake blends that still follow a rule, and the category admits it.
-  const bases = shuffle([...FAKE_BLEND_BASES]).slice(0, 4);
-  const words = bases.map(([a,b]) => blend(a,b).toUpperCase());
-  return {
-    type: "fake",
-    category: "FAKE WORDS THAT SOUND PLAUSIBLE",
-    words,
-    note: "These are invented, but consistently formed."
-  };
-}
-
-function blend(a,b) {
-  // simple mash: first 2-3 letters of a + last 3-4 of b
-  const A = a.toUpperCase();
-  const B = b.toUpperCase();
-  const aPart = A.slice(0, Math.min(3, Math.max(2, Math.floor(A.length/2))));
-  const bPart = B.slice(Math.max(0, B.length - 4));
-  return aPart + bPart;
-}
-
-// Infinite-ish pattern generator: "WORDS CONTAINING ___"
-const CONTAINS_SEEDS = ["ARC","NETH","CRAFT","BYTE","LOOT","RING","FANG","VOID","NEON","HEX"];
-const CONTAINS_POOL = uniq([
-  ...BANK.GAMING, ...BANK.MINECRAFT, ...BANK.SLANG, ...BANK.HARDWORDS, ...BANK.WEAPONS, ...BANK.COLORS,
-  ...BANK.MARVEL, ...BANK.STARWARS, ...BANK.POKEMON
-].map(x => String(x).toUpperCase()));
-
-function makeContainsCategory() {
-  const seed = pick(CONTAINS_SEEDS);
-  const matches = CONTAINS_POOL.filter(w => w.includes(seed) && w.length <= 12);
-  if (matches.length < 4) return makeBankCategory();
-  const words = shuffle([...matches]).slice(0, 4);
-  return { type: "pattern", category: `WORDS THAT CONTAIN "${seed}"`, words, validator:(w)=>w.includes(seed) };
-}
-
-// ---------- Puzzle assembly with validation ----------
+// -----------------------------
+// BUILD PUZZLE (NO LOGIC CRIMES)
+// -----------------------------
 function buildPuzzle(difficulty) {
-  const wanted = [];
+  const factories = [
+    catHomophones,
+    catPortmanteaus,
+    catBank,
+    catFandomCrossover,
+    catMega,
+    catAfterQuick,
+    catFakeButDeclared,
+  ];
 
-  // Always include at least one “logic-safe” category
-  wanted.push(makeHomophoneCategory());
+  // Weighting: higher difficulty = more trap categories
+  const weights = (difficulty) => {
+    if (difficulty <= 2) return [3,2,6,1,2,1,0];   // mostly bank + easy patterns
+    if (difficulty === 3) return [3,3,5,2,2,2,1];
+    if (difficulty === 4) return [3,3,4,3,2,2,2];
+    return [3,3,3,4,2,2,3]; // brutal: more crossover + fake
+  };
 
-  // Add harder/nerdier based on difficulty
-  if (difficulty >= 3) wanted.push(makePortmanteauCategory());
-  if (difficulty >= 4) wanted.push(makeContainsCategory());
-  if (difficulty >= 5) wanted.push(makeFandomCrossoverCategory());
-
-  // Fill remaining slots with variety
-  while (wanted.length < 4) {
-    const roll = randInt(100);
-    let c;
-    if (roll < 15) c = makeMegaCategory();
-    else if (roll < 35) c = makeFandomCrossoverCategory();
-    else if (roll < 55) c = makeContainsCategory();
-    else if (roll < 70) c = makeFakeButDeclaredCategory();
-    else c = makeBankCategory();
-    wanted.push(c);
+  const w = weights(difficulty);
+  const picks = [];
+  while (picks.length < 10) {
+    const idx = weightedIndex(w);
+    picks.push(factories[idx]());
   }
 
-  // Now enforce uniqueness and correctness
+  // Select 4 categories that do NOT share words
   const groups = [];
   const used = new Set();
 
-  for (const g0 of shuffle(wanted).slice(0, 4)) {
-    const g = normalizeGroup(g0);
-
-    // Validate words match the category rules (if present)
-    if (g.validator) {
-      for (const w of g.words) {
-        if (!g.validator(w)) {
-          // If this happens, the category factory is broken.
-          // Replace with a safe bank category.
-          const safe = normalizeGroup(makeBankCategory());
-          groups.push(safe);
-          safe.words.forEach(w2 => used.add(w2));
-          continue;
-        }
-      }
-    }
-
-    // Ensure 4 unique words within group
-    g.words = uniq(g.words);
-    if (g.words.length !== 4) {
-      const safe = normalizeGroup(makeBankCategory());
-      groups.push(safe);
-      safe.words.forEach(w2 => used.add(w2));
-      continue;
-    }
-
-    // Ensure no duplicate words across groups
-    const overlap = g.words.some(w => used.has(w));
-    if (overlap) {
-      const safe = normalizeGroup(makeBankCategory());
-      groups.push(safe);
-      safe.words.forEach(w2 => used.add(w2));
-      continue;
-    }
-
-    groups.push(g);
-    g.words.forEach(w => used.add(w));
+  for (const g of shuffle(picks)) {
+    const words = uniq(upperWords(g.words));
+    if (words.length !== 4) continue;
+    if (words.some(x => used.has(x))) continue;
+    groups.push({
+      color: COLORS[groups.length],
+      category: String(g.category).toUpperCase(),
+      words
+    });
+    words.forEach(x => used.add(x));
+    if (groups.length === 4) break;
   }
 
-  // Difficulty-based “overlap feel”: not word-overlap, but category adjacency
-  // We do it by making category names more similar / misleading at high difficulty.
-  if (difficulty >= 5) {
-    // Slightly meaner labels (still true)
-    for (const g of groups) {
-      if (g.category === "HIGH-LEVEL VOCAB") g.category = "WORDS THAT MAKE YOU FEEL INADEQUATE";
-      if (g.category === "INTERNET SLANG") g.category = "TERMS THAT MAKE ADULTS ANGRY";
-    }
+  // Fallback: if we somehow didn’t get 4, brute fill with bank categories
+  while (groups.length < 4) {
+    const g = catBank();
+    const words = uniq(upperWords(g.words));
+    if (words.length !== 4) continue;
+    if (words.some(x => used.has(x))) continue;
+    groups.push({ color: COLORS[groups.length], category: String(g.category).toUpperCase(), words });
+    words.forEach(x => used.add(x));
   }
 
-  // Assign colors
-  const colored = groups.map((g, i) => ({
-    color: COLORS[i],
-    category: g.category,
-    words: g.words
-  }));
-
-  // Flatten into tiles
+  // Build tiles
   const tiles = [];
-  colored.forEach((grp, gi) => {
-    grp.words.forEach(w => tiles.push({ word: w, groupIndex: gi }));
-  });
-
+  groups.forEach((g, groupIndex) => g.words.forEach(word => tiles.push({ word, groupIndex })));
   shuffle(tiles);
 
-  return {
-    groups: colored,
-    tiles
-  };
+  return { groups, tiles };
 }
 
-function normalizeGroup(g) {
-  return {
-    category: String(g.category).toUpperCase(),
-    words: g.words.map(w => String(w).toUpperCase()),
-    validator: g.validator || null
-  };
+function weightedIndex(weights) {
+  const total = weights.reduce((a,b)=>a+b,0);
+  let r = Math.random() * total;
+  for (let i=0;i<weights.length;i++){
+    r -= weights[i];
+    if (r <= 0) return i;
+  }
+  return weights.length - 1;
 }
