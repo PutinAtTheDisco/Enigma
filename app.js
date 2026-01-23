@@ -1,5 +1,5 @@
 // app.js — FULL REPLACEMENT for Connected!
-// Requires: /hints.js (module) and working /api/puzzle endpoint.
+// Requires: /hints.js and working /api/puzzle endpoint.
 
 const el = (id) => document.getElementById(id);
 
@@ -45,7 +45,7 @@ function toast(text){
   t.textContent = text;
   t.classList.add("show");
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove("show"), 1500);
+  toast._t = setTimeout(() => t.classList.remove("show"), 1400);
 }
 
 function randInt(n){ return Math.floor(Math.random()*n); }
@@ -80,12 +80,6 @@ let tiles = [];
 let selected = new Set();
 let solved = [];
 let mistakes = 0;
-
-// Helpful: show API failures instead of silent sadness
-function showFatal(msg){
-  el("hintLine").textContent = msg;
-  toast(msg);
-}
 
 function renderDots(){
   const dots = el("dots");
@@ -136,7 +130,6 @@ function renderGrid(){
     grid.appendChild(d);
   }
 
-  // keep grid stable with hidden blanks
   const blanks = Math.max(0, 16 - (solved.length * 4) - remaining.length);
   for(let i=0;i<blanks;i++){
     const b = document.createElement("div");
@@ -148,10 +141,6 @@ function renderGrid(){
 
 function updateUIState(){
   el("submitBtn").disabled = selected.size !== 4;
-  if(!puzzle){
-    el("hintLine").textContent = "Loading puzzle…";
-    return;
-  }
   el("hintLine").textContent =
     selected.size === 0 ? "Select 4 tiles." : `Selected: ${selected.size}/4`;
 }
@@ -182,7 +171,6 @@ function shuffleTiles(){
   updateUIState();
 }
 
-// If you have 3 from the same group, you're one away.
 function oneAwayCheck(picks){
   const counts = new Map();
   for(const p of picks){
@@ -229,17 +217,16 @@ function submit(){
   }
 }
 
-// REAL hint: uses hints.js
 async function hint(){
-  if(!puzzle) return toast("No puzzle loaded. Reality remains bleak.");
+  if(!puzzle) return toast("No puzzle loaded.");
 
   try{
     const mod = await import("./hints.js");
-    const text = mod.getHint(puzzle, tiles, solved, difficulty);
+    const text = mod.getHint(puzzle, tiles, solved, difficulty, selected);
     el("hintLine").textContent = text;
     toast(text);
   }catch(e){
-    toast("Hints failed. The universe remains consistent.");
+    toast("Hints failed to load. (Check hints.js path)");
   }
 }
 
@@ -256,7 +243,6 @@ function endGame(won){
   saveStats();
 
   if(!won){
-    // Reveal on loss
     solved = [...puzzle.groups];
     renderSolvedBars();
     tiles.forEach(t => t.locked = true);
@@ -266,33 +252,13 @@ function endGame(won){
   toast(won ? "Win." : "Loss.");
 }
 
-function normalizePuzzle(data){
-  // Ensure structure exists and is valid
-  if(!data || !Array.isArray(data.groups) || !Array.isArray(data.tiles)) return null;
-  if(data.groups.length !== 4) return null;
-  if(data.tiles.length !== 16) return null;
-  return data;
-}
-
 async function fetchPuzzle(){
-  el("hintLine").textContent = "Summoning fresh suffering…";
   toast("Summoning fresh suffering…");
-
   const url = `/api/puzzle?difficulty=${encodeURIComponent(difficulty)}`;
+
   const res = await fetch(url, { cache: "no-store" });
-
-  if(!res.ok){
-    const msg = `API error: ${res.status}. Your backend is judging you.`;
-    showFatal(msg);
-    throw new Error(msg);
-  }
-
-  const data = normalizePuzzle(await res.json());
-  if(!data){
-    const msg = "Bad puzzle payload. Generator emitted nonsense.";
-    showFatal(msg);
-    throw new Error(msg);
-  }
+  if(!res.ok) throw new Error(`API error: ${res.status}`);
+  const data = await res.json();
 
   puzzle = data;
   solved = [];
