@@ -1,74 +1,84 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <link rel="stylesheet" href="formatting.css">
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#ffffff" />
-  <title>Enigma</title>
+  <meta name="description" content="Connected! — Create four groups of four. Hard mode is a lifestyle." />
+
+  <title>Connected!</title>
+
+  <!-- App styles -->
+  <link rel="stylesheet" href="/styles.css" />
+
+  <!-- PWA essentials (safe even if you don’t have these files yet) -->
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/style.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&family=Titan+One&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=9">
-<link rel="stylesheet" href="formatting.css?v=9">
+  <link rel="icon" href="/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+
 </head>
 <body>
-  <script src="hints.js"></script>
   <div class="wrap">
-    <header class="header">
-      <h1 id="gameTitle" class="title">Connected!</h1>
-      <div class="stats" id="stats"></div>
-    </header>
+    <h1>Connected!</h1>
 
-    <section class="controls">
-      <div class="controlRow">
-        <div class="controlTitle">Difficulty</div>
-        <div class="controlValue" id="diffLabel">Hard</div>
+    <div class="card">
+      <div id="stats">Played: 0   Wins: 0   Losses: 0   Win rate: 0%   Streak: 0   Best: 0</div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div class="label">Difficulty</div>
+        <div id="diffLabel" class="muted">Hard</div>
       </div>
-      <div class="controlRow">
+
+      <div class="sliderRow" style="margin-top:10px;">
         <input id="diff" type="range" min="1" max="5" step="1" value="4" />
-        <div class="controlHint" id="diffHint">More overlap, more purple, more pain.</div>
-      </div>
-    </section>
-
-    <main class="board">
-      <div class="solvedArea" id="solvedArea"></div>
-
-      <div class="grid" id="grid"></div>
-
-      <div class="mistakesRow">
-        <span>Mistakes remaining:</span>
-        <div class="dots" id="dots"></div>
       </div>
 
-      <div class="btnRow">
-        <button class="btn" id="shuffleBtn">Shuffle</button>
-        <button class="btn" id="deselectBtn">Deselect All</button>
-        <button class="btn" id="submitBtn" disabled>Submit</button>
-      </div>
+      <div id="diffHint">More overlap, more purple, more pain.</div>
+    </div>
 
-      <div class="toastWrap"><div class="toast" id="toast"></div></div>
+    <div id="solvedArea"></div>
 
-      <div class="footerMini">
-        <span id="hintLine">Select 4 tiles.</span>
-        <div class="miniBtnRow">
-          <button class="miniBtn" id="hintBtn">Hint</button>
-          <button class="miniBtn" id="newBtn">New Puzzle</button>
-          <button class="miniBtn danger" id="resetStatsBtn">Reset Stats</button>
-        </div>
+    <div class="label muted" style="text-align:center; margin-top:12px;">
+      Mistakes remaining:
+    </div>
+    <div id="dots"></div>
+
+    <div class="btnRow">
+      <button id="shuffleBtn">Shuffle</button>
+      <button id="deselectBtn">Deselect All</button>
+    </div>
+
+    <div class="btnRow">
+      <button id="submitBtn" disabled>Submit</button>
+    </div>
+
+    <div class="card" id="gridCard">
+      <div id="grid"></div>
+      <div id="hintLine">Loading puzzle…</div>
+    </div>
+
+    <div class="bottomRow">
+      <div class="left">Select 4 tiles.</div>
+      <div class="right">
+        <button id="hintBtn" class="smallBtn">Hint</button>
+        <button id="newBtn" class="smallBtn">New Puzzle</button>
+        <button id="resetStatsBtn" class="smallBtn danger">Reset Stats</button>
       </div>
-    </main>
+    </div>
   </div>
-  
+
+  <div id="toast"></div>
+
+  <!-- IMPORTANT: app.js must be a module because it imports hints.js -->
+  <script type="module" src="/app.js"></script>
+
+  <!-- Optional: service worker (won’t break if missing) -->
   <script>
-    // PWA service worker (optional but nice)
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
-    <script src="app.js?v=9"></script>
-<script src="hints.js?v=9"></script>
   </script>
 </body>
 </html>
