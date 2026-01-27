@@ -1,543 +1,568 @@
+// functions/api/puzzle.js
+// Cloudflare Pages Functions: /api/puzzle
+// Goal: generate Connections-style puzzles that are HARD but FAIR.
+// No invisible logic. No "trust me bro" categories.
+//
+// Query params:
+//   difficulty=1..5  (default 4)
+//   seen=comma words (optional) - client can pass recently seen words to reduce repeats
+//   seenCats=comma cat ids (optional) - client can pass recent category ids to reduce repeats
+
+const json = (obj, status = 200, headers = {}) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      ...headers,
+    },
+  });
+
+const clampInt = (v, min, max, fallback) => {
+  const n = Number.parseInt(v, 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+};
+
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const shuffle = (arr) => {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+};
+
+const uniqUpper = (s) => String(s || "").trim().toUpperCase();
+
+const WORD_MAX = 12; // keep tiles readable; longer words should be avoided by generator
+
+// ---------------------------
+// BIG WORD POOLS (curated + fair)
+// ---------------------------
+
+// Keep pools compact-ish but varied.
+// Add more anytime, but keep them "solvable from the grid" style.
+
+const POOLS = {
+  // Common but crisp
+  COLORS: ["IVORY", "JADE", "AMBER", "TEAL", "MAUVE", "OCHRE", "SABLE", "TAUPE", "CORAL", "INDIGO"],
+  SHAPES: ["ARC", "RING", "CONE", "CUBE", "SPHERE", "PRISM", "TORUS", "OVAL", "WEDGE", "HELIX"],
+
+  // Language / academia
+  GREEK: ["ALPHA", "BETA", "GAMMA", "DELTA", "THETA", "LAMBDA", "SIGMA", "OMEGA"],
+  LATIN_PHRASES: ["AD HOC", "ET AL", "A PRIORI", "PER SE", "DE FACTO", "IN VIVO", "IN SITU", "EX POST"],
+  LOGIC: ["AXIOM", "LEMMA", "PROOF", "CLAIM", "COROLLARY", "THEOREM", "INFERENCE", "FALLACY"],
+  RHETORIC: ["ETHOS", "PATHOS", "LOGOS", "IRONY", "SATIRE", "HYPERBOLE", "METAPHOR", "EUPHEMISM"],
+
+  // Pop/nerd culture terms (still fair categories)
+  GAME_TERMS: ["NPC", "SPAWN", "RAID", "LOOT", "PATCH", "NERF", "BUFF", "GLITCH", "QUEST", "BOSS"],
+  COMIC: ["HERO", "VILLAIN", "ORIGIN", "CAMEO", "CANON", "RETCON", "REBOOT", "SEQUEL"],
+  MEME_SLANG: ["RIZZ", "BASED", "SUS", "COPE", "YEET", "DRIP", "NO CAP", "LURK", "BAIT", "GLOWUP"],
+
+  // Science-y but not nonsense
+  SI_BASE: ["AMPERE", "KELVIN", "SECOND", "METER", "KILOGRAM", "MOLE", "CANDELA"],
+  CHEM_SYMBOLS: ["H", "HE", "C", "N", "O", "NA", "CL", "FE", "AG", "AU", "SN", "PB"],
+  ASTRONOMY: ["ORBIT", "ECLIPSE", "NEBULA", "COMET", "GALAXY", "QUASAR", "PULSAR", "AURORA"],
+
+  // Weapons (safe list)
+  MED_WEAPONS: ["FLAIL", "MACE", "SPEAR", "DAGGER", "CUTLASS", "SCIMITAR", "HALBERD", "LONGBOW"],
+
+  // Minecraft-ish but accurate
+  MINECRAFT: ["NETHER", "END", "ELYTRA", "ANVIL", "BEACON", "OBSIDIAN", "REDSTONE", "CREEPER", "VILLAGER", "ENCHANT"],
+};
+
+// Some “made-up” words are allowed only inside specific *visible* rules.
+// Example: add a letter, spoonerize, replace vowel, etc.
+// We’ll generate those rather than storing random fake junk.
+
+// ---------------------------
+// CATEGORY GENERATORS (each returns { id, category, words, explain?, tags? })
+// Must be FAIR: relationship inferable from the 4 words themselves.
+// ---------------------------
+
+const makeCategory = (id, category, words, meta = {}) => ({
+  id,
+  category,
+  words,
+  ...meta,
+});
+
+const isGoodWord = (w) => {
+  const x = uniqUpper(w);
+  if (!x) return false;
+  if (x.length > WORD_MAX) return false;
+  // avoid strings that are only punctuation
+  if (!/[A-Z0-9]/.test(x)) return false;
+  return true;
+};
+
+const normalizeWords = (words) =>
+  words.map(uniqUpper).filter(isGoodWord);
+
+// Validators: prevent "invisible logic"
+const validators = {
+  // For homophone pairs, we must include both sides for each pair.
+  homophonePairs(words, pairs) {
+    const set = new Set(words);
+    // At least 2 pairs visible (4 words)
+    return pairs.every(([a, b]) => set.has(a) && set.has(b));
+  },
+
+  // For prefix/suffix rule, all words must share prefix/suffix visibly.
+  startsWith(words, prefix) {
+    return words.every((w) => w.startsWith(prefix));
+  },
+  endsWith(words, suffix) {
+    return words.every((w) => w.endsWith(suffix));
+  },
+
+  // For anagram set, all words must be anagrams of the same sorted letters.
+  allAnagrams(words) {
+    const key = (w) => w.replace(/\s+/g, "").split("").sort().join("");
+    const k0 = key(words[0]);
+    return words.every((w) => key(w) === k0);
+  },
+
+  // For "one-letter-off" family, all must differ by exactly one letter from a base.
+  oneLetterFromBase(words, base) {
+    const b = base.replace(/\s+/g, "");
+    const dist = (a, b) => {
+      if (a.length !== b.length) return 999;
+      let d = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+      return d;
+    };
+    const clean = (w) => w.replace(/\s+/g, "");
+    return words.every((w) => dist(clean(w), b) === 1);
+  },
+};
+
+function genPrefixStarts(prefix, pool, id) {
+  // pull words from pool that start with prefix
+  const picks = shuffle(pool.map(uniqUpper).filter((w) => w.startsWith(prefix)));
+  const words = picks.slice(0, 4);
+  if (words.length < 4) return null;
+  if (!validators.startsWith(words, prefix)) return null;
+  return makeCategory(id, `WORDS THAT START WITH "${prefix}"`, words);
+}
+
+function genPrefixEnds(suffix, pool, id) {
+  const picks = shuffle(pool.map(uniqUpper).filter((w) => w.endsWith(suffix)));
+  const words = picks.slice(0, 4);
+  if (words.length < 4) return null;
+  if (!validators.endsWith(words, suffix)) return null;
+  return makeCategory(id, `WORDS THAT END WITH "${suffix}"`, words);
+}
+
+function genSetFromPool(category, pool, id) {
+  const picks = shuffle(pool.map(uniqUpper).filter(isGoodWord)).slice(0, 4);
+  if (picks.length < 4) return null;
+  return makeCategory(id, category, picks);
+}
+
+function genHomophonePairs(id) {
+  // Visible pairs only. Always.
+  const PAIRS = [
+    ["SEA", "SEE"],
+    ["KNIGHT", "NIGHT"],
+    ["PAIR", "PEAR"],
+    ["WEEK", "WEAK"],
+    ["MALE", "MAIL"],
+    ["STAKE", "STEAK"],
+    ["PAIN", "PANE"],
+    ["SENT", "SCENT"],
+    ["PLAIN", "PLANE"],
+    ["RIGHT", "WRITE"],
+    ["SON", "SUN"],
+    ["HOLE", "WHOLE"],
+  ].map(([a, b]) => [uniqUpper(a), uniqUpper(b)]);
+
+  const twoPairs = shuffle(PAIRS).slice(0, 2);
+  const words = normalizeWords([twoPairs[0][0], twoPairs[0][1], twoPairs[1][0], twoPairs[1][1]]);
+  if (words.length !== 4) return null;
+  if (!validators.homophonePairs(words, twoPairs)) return null;
+  return makeCategory(id, "HOMOPHONE PAIRS", words);
+}
+
+function genPortmanteau(id) {
+  // Visible portmanteaus, common enough to be fair.
+  const pool = ["STAYCATION", "CHILLAX", "MANSPLAIN", "FANFIC", "BRUNCH", "SPORK", "FRENEMY", "HANGRY"];
+  const words = shuffle(pool).slice(0, 4).map(uniqUpper);
+  return makeCategory(id, "PORTMANTEAUS", words);
+}
+
+function genLogicSet(id) {
+  return genSetFromPool("FORMAL LOGIC WORDS", POOLS.LOGIC, id);
+}
+
+function genRhetoricSet(id) {
+  return genSetFromPool("RHETORICAL DEVICES", POOLS.RHETORIC, id);
+}
+
+function genGreekLetters(id) {
+  const words = shuffle(POOLS.GREEK).slice(0, 4).map(uniqUpper);
+  return makeCategory(id, "GREEK LETTERS", words);
+}
+
+function genComicCanon(id) {
+  return genSetFromPool("STORY CONTINUITY TERMS", POOLS.COMIC, id);
+}
+
+function genGameTerms(id) {
+  return genSetFromPool("VIDEO GAME TERMS", POOLS.GAME_TERMS, id);
+}
+
+function genMinecraftSet(id) {
+  return genSetFromPool("MINECRAFT THINGS", POOLS.MINECRAFT, id);
+}
+
+function genWeapons(id) {
+  return genSetFromPool("MEDIEVAL WEAPONS", POOLS.MED_WEAPONS, id);
+}
+
+function genSIBase(id) {
+  const words = shuffle(POOLS.SI_BASE).slice(0, 4).map(uniqUpper);
+  return makeCategory(id, "SI BASE UNITS", words);
+}
+
+function genChemSymbols(id) {
+  const words = shuffle(POOLS.CHEM_SYMBOLS).slice(0, 4).map(uniqUpper);
+  return makeCategory(id, "CHEMICAL SYMBOLS", words);
+}
+
+function genAstronomy(id) {
+  return genSetFromPool("ASTRONOMY WORDS", POOLS.ASTRONOMY, id);
+}
+
+function genPalindrome-ish(id) {
+  // Fair: words that become a different word when reversed is NOT fair.
+  // Instead: actual palindromes or known ones.
+  const pool = ["LEVEL", "RADAR", "CIVIC", "ROTOR", "KAYAK", "REFER"];
+  const words = shuffle(pool).slice(0, 4).map(uniqUpper);
+  return makeCategory(id, "PALINDROMES", words);
+}
+
+function genOneLetterOff(id) {
+  // Choose a base word and create 4 variants differing by one letter.
+  const bases = ["STONE", "PLANE", "CABLE", "TRACE", "SCORE", "RANGE", "SPORE"];
+  const base = pick(bases).toUpperCase();
+  // build variants by swapping one position
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const mk = (pos, ch) => base.slice(0, pos) + ch + base.slice(pos + 1);
+  const variants = new Set();
+  while (variants.size < 4) {
+    const pos = Math.floor(Math.random() * base.length);
+    const ch = alphabet[Math.floor(Math.random() * alphabet.length)];
+    if (ch === base[pos]) continue;
+    variants.add(mk(pos, ch));
+  }
+  const words = [...variants].map(uniqUpper);
+  if (!validators.oneLetterFromBase(words, base)) return null;
+  return makeCategory(id, `ONE-LETTER CHANGES OF "${base}"`, words);
+}
+
+function genStartsWithMega(id) {
+  // Make sure these are real-ish or at least consistent and readable.
+  const pool = ["MEGAPHONE", "MEGACITY", "MEGASTAR", "MEGATON", "MEGABYTE", "MEGALITH", "MEGASTORE", "MEGAPLEX"];
+  return genPrefixStarts("MEGA", pool, id);
+}
+
+function genEndsWithCraft(id) {
+  // Your nerd heart asked for it.
+  const pool = ["MOONCRAFT", "EMBERCRAFT", "DREAMCRAFT", "PIXELCRAFT", "STARCRAFT", "WITCHCRAFT", "HANDCRAFT", "SOULCRAFT"];
+  return genPrefixEnds("CRAFT", pool, id);
+}
+
+function genSlangSet(id) {
+  return genSetFromPool("INTERNET SLANG", POOLS.MEME_SLANG, id);
+}
+
+// Scholar-y wordplay that stays fair:
+function genHiddenWord(id) {
+  // The category is: "CONTAINS ___"
+  // All 4 words contain the same trigram.
+  const chunks = ["ARC", "ION", "MAL", "TAR", "RIZ", "NETH", "LOG", "THE"];
+  const chunk = pick(chunks).toUpperCase();
+
+  // Build words that contain the chunk; mix real + plausible, but keep readable.
+  // Avoid going too fake: we use a small curated bank per chunk.
+  const bank = {
+    ARC: ["ARCH", "ARCADE", "MONARCH", "SEARCH"],
+    ION: ["IONIC", "POTION", "LION", "UNION"],
+    TAR: ["STAR", "TAROT", "GUITAR", "TARMAC"],
+    LOG: ["LOGIC", "PROLOG", "CATALOG", "BLOG"],
+    THE: ["THEME", "THEORY", "THESIS", "THEATER"],
+    MAL: ["MALICE", "NORMAL", "ANOMALY", "MALLET"],
+    RIZ: ["RIZZ", "BRIZ", "RIZZO", "RIZAL"], // okay, spicy
+    NETH: ["NETHER", "ANETH", "NETHIN", "NETHERS"], // will be validated by length
+  };
+
+  const pool = (bank[chunk] || []).map(uniqUpper).filter(isGoodWord);
+  if (pool.length < 4) return null;
+  const words = shuffle(pool).slice(0, 4);
+  // visible validation
+  if (!words.every((w) => w.includes(chunk))) return null;
+  return makeCategory(id, `CONTAINS "${chunk}"`, words);
+}
+
+// ---------------------------
+// “Freshness” source (Wikidata labels)
+// We keep this optional + safe.
+// We only use it to build one category: "FAMOUS ___ (FROM WIKIDATA)" with strict rules.
+// ---------------------------
+
+async function fetchWikidataLabels(limit = 40) {
+  // Pull English labels for random-ish items via a generic query.
+  // Guard: if fetch fails, we just return [].
+  const endpoint = "https://query.wikidata.org/sparql";
+  const query = `
+    SELECT ?item ?itemLabel WHERE {
+      ?item wdt:P31 ?type .
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    } LIMIT ${Math.max(10, Math.min(80, limit))}
+  `;
+
+  try {
+    const url = endpoint + "?format=json&query=" + encodeURIComponent(query);
+    const res = await fetch(url, {
+      headers: { "user-agent": "Connected!/CF Pages Function" },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const labels = (data?.results?.bindings || [])
+      .map((b) => b?.itemLabel?.value)
+      .filter(Boolean)
+      .map((s) => s.trim())
+      .filter((s) => /^[A-Za-z][A-Za-z\s\-]{1,20}$/.test(s)) // keep it tile-friendly
+      .map((s) => s.toUpperCase())
+      .filter((s) => s.length <= WORD_MAX);
+    // De-dup
+    return [...new Set(labels)];
+  } catch {
+    return [];
+  }
+}
+
+function genFromWikidata(labels, id) {
+  // Make a fair category: "FOUR REAL-WORLD NAMES" is not fair.
+  // So we do a category that is self-contained: "FOUR SINGLE-WORD PROPER NOUNS"
+  // It's still knowledge-based, but coherent and not invisible.
+  const pool = labels.filter((s) => s.split(/\s+/).length === 1);
+  if (pool.length < 20) return null;
+  const words = shuffle(pool).slice(0, 4).map(uniqUpper);
+  return makeCategory(id, "PROPER NOUNS (WIKIDATA PULL)", words);
+}
+
+// ---------------------------
+// Category bank + weighting
+// ---------------------------
+
+const BANK = [
+  { id: "HOMOPHONE_PAIRS", w: 8, fn: genHomophonePairs },
+  { id: "PORTMANTEAUS", w: 6, fn: genPortmanteau },
+  { id: "LOGIC", w: 6, fn: genLogicSet },
+  { id: "RHETORIC", w: 6, fn: genRhetoricSet },
+  { id: "GREEK", w: 6, fn: genGreekLetters },
+  { id: "COMIC_CANON", w: 6, fn: genComicCanon },
+  { id: "GAME_TERMS", w: 6, fn: genGameTerms },
+  { id: "MINECRAFT", w: 6, fn: genMinecraftSet },
+  { id: "WEAPONS", w: 5, fn: genWeapons },
+  { id: "SI_BASE", w: 5, fn: genSIBase },
+  { id: "CHEM_SYMBOLS", w: 5, fn: genChemSymbols },
+  { id: "ASTRONOMY", w: 5, fn: genAstronomy },
+  { id: "PALINDROMES", w: 4, fn: genPalindrome-ish },
+  { id: "ONE_LETTER_OFF", w: 6, fn: genOneLetterOff },
+  { id: "STARTS_MEGA", w: 4, fn: genStartsWithMega },
+  { id: "ENDS_CRAFT", w: 4, fn: genEndsWithCraft },
+  { id: "SLANG", w: 6, fn: genSlangSet },
+  { id: "HIDDEN_WORD", w: 7, fn: genHiddenWord },
+];
+
+// Weighted choice with exclusion
+function weightedPick(exclusions = new Set()) {
+  const options = BANK.filter((x) => !exclusions.has(x.id));
+  const total = options.reduce((a, b) => a + b.w, 0);
+  let r = Math.random() * total;
+  for (const opt of options) {
+    r -= opt.w;
+    if (r <= 0) return opt;
+  }
+  return options[options.length - 1];
+}
+
+// ---------------------------
+// Puzzle assembly + strict fairness
+// ---------------------------
+
+function scoreOverlap(groups) {
+  // Counts how many tiles could plausibly fit multiple groups by naive heuristics.
+  // We want more overlap at higher difficulty, but still valid groups.
+  const allWords = groups.flatMap((g) => g.words);
+  const counts = new Map();
+  for (const w of allWords) counts.set(w, (counts.get(w) || 0) + 1);
+  // duplicates should be zero; if any duplicates, overlap score is max (bad)
+  const dup = [...counts.values()].some((c) => c > 1);
+  if (dup) return 999;
+
+  // Soft overlap heuristics: shared prefixes/suffixes across groups
+  const prefix2 = (w) => w.replace(/\s+/g, "").slice(0, 2);
+  const suffix2 = (w) => w.replace(/\s+/g, "").slice(-2);
+  let overlaps = 0;
+  const seenP = new Map();
+  const seenS = new Map();
+  for (const w of allWords) {
+    const p = prefix2(w);
+    const s = suffix2(w);
+    seenP.set(p, (seenP.get(p) || 0) + 1);
+    seenS.set(s, (seenS.get(s) || 0) + 1);
+  }
+  for (const v of seenP.values()) if (v >= 3) overlaps += 1;
+  for (const v of seenS.values()) if (v >= 3) overlaps += 1;
+  return overlaps;
+}
+
+function validatePuzzle(groups) {
+  if (groups.length !== 4) return false;
+
+  // all words must be unique + tile-safe
+  const all = groups.flatMap((g) => g.words.map(uniqUpper));
+  if (all.length !== 16) return false;
+
+  const set = new Set(all);
+  if (set.size !== 16) return false;
+
+  // avoid ultra-long words
+  if (all.some((w) => w.length > WORD_MAX)) return false;
+
+  return true;
+}
+
+// Colors by difficulty; harder = more likely BLUE/PURPLE are evil
+const COLOR_ORDER = ["YELLOW", "GREEN", "BLUE", "PURPLE"];
+
+function difficultyConfig(difficulty) {
+  // difficulty 1: simplest categories, less overlap pressure
+  // difficulty 5: maximum overlap bait + more wordplay categories
+  return {
+    attempts: 40 + difficulty * 10,
+    overlapTarget: difficulty <= 2 ? 0 : difficulty === 3 ? 1 : difficulty === 4 ? 2 : 3,
+    allowWikidata: difficulty >= 4, // optional spice
+    wikidataChance: difficulty >= 5 ? 0.35 : difficulty >= 4 ? 0.2 : 0.0,
+    preferWordplay: difficulty >= 4,
+  };
+}
+
+async function buildPuzzle(difficulty, seenWordsSet, seenCatsSet) {
+  const cfg = difficultyConfig(difficulty);
+
+  // Preload Wikidata sometimes (non-blocking failure)
+  let wikidataLabels = [];
+  if (cfg.allowWikidata && Math.random() < cfg.wikidataChance) {
+    wikidataLabels = await fetchWikidataLabels(60);
+  }
+
+  for (let attempt = 0; attempt < cfg.attempts; attempt++) {
+    const usedCats = new Set();
+    const groups = [];
+
+    // optionally exclude recently seen categories
+    const catExclusions = new Set(seenCatsSet || []);
+    // build 4 groups
+    while (groups.length < 4) {
+      const opt = weightedPick(new Set([...usedCats, ...catExclusions]));
+      let g = opt.fn(opt.id);
+
+      // Wikidata slot sometimes replaces a mid group, but only if it succeeds
+      if (!g && opt.id === "WIKIDATA") continue;
+
+      // Sometimes add Wikidata as an extra option
+      if (!g && wikidataLabels.length && Math.random() < 0.15) {
+        g = genFromWikidata(wikidataLabels, "WIKIDATA");
+      } else if (!g && wikidataLabels.length && groups.length === 2 && Math.random() < 0.25) {
+        g = genFromWikidata(wikidataLabels, "WIKIDATA");
+      }
+
+      if (!g) continue;
+
+      // normalize + reject seen words to reduce repeats (best effort)
+      g.words = normalizeWords(g.words);
+      if (g.words.length !== 4) continue;
+      if (g.words.some((w) => seenWordsSet.has(w))) continue;
+
+      usedCats.add(opt.id);
+      groups.push(g);
+    }
+
+    // strict validation
+    if (!validatePuzzle(groups)) continue;
+
+    // overlap tuning: keep overlap at/near target
+    const overlapScore = scoreOverlap(groups);
+    const target = cfg.overlapTarget;
+    // We accept if within 1 of target; higher difficulty wants more overlap.
+    if (Math.abs(overlapScore - target) > 1) continue;
+
+    // assign standard NYT-ish colors in order, but shuffle which category gets which
+    const colors = shuffle([...COLOR_ORDER]);
+    const colored = groups.map((g, i) => ({
+      color: colors[i],
+      category: g.category,
+      words: g.words,
+      _id: g.id,
+    }));
+
+    // Build tiles and shuffle
+    const tiles = shuffle(
+      colored.flatMap((g, gi) => g.words.map((w) => ({ word: w, groupIndex: gi })))
+    );
+
+    return { groups: colored, tiles };
+  }
+
+  // last-resort fallback: just make something valid even if overlap isn't perfect
+  const fallbackGroups = [
+    genHomophonePairs("HOMOPHONE_PAIRS"),
+    genPortmanteau("PORTMANTEAUS"),
+    genGameTerms("GAME_TERMS"),
+    genLogicSet("LOGIC"),
+  ].map((g, i) => ({
+    color: COLOR_ORDER[i],
+    category: g.category,
+    words: g.words.map(uniqUpper),
+    _id: g.id,
+  }));
+
+  const tiles = shuffle(
+    fallbackGroups.flatMap((g, gi) => g.words.map((w) => ({ word: w, groupIndex: gi })))
+  );
+
+  return { groups: fallbackGroups, tiles };
+}
+
+// ---------------------------
+// CF Pages Function entry
+// ---------------------------
+
 export async function onRequest(context) {
   const { request } = context;
   const u = new URL(request.url);
 
   const difficulty = clampInt(u.searchParams.get("difficulty"), 1, 5, 4);
 
-  // Client can send recently used tokens so we avoid repeats *per user*
-  // recent=comma,separated,slugs
-  const recentParam = (u.searchParams.get("recent") || "").trim();
-  const recent = new Set(
-    recentParam
-      .split(",")
-      .map(s => s.trim().toLowerCase())
-      .filter(Boolean)
-      .slice(0, 250) // cap
-  );
+  const seenWords = (u.searchParams.get("seen") || "")
+    .split(",")
+    .map(uniqUpper)
+    .filter(Boolean);
 
-  const config = {
-    difficulty,
-    wikidataChance: difficulty >= 4 ? 0.35 : difficulty === 3 ? 0.25 : 0.15,
-    maxAttempts: 250,
-    avoidRecent: true,
-    recentSet: recent,
-  };
+  const seenCats = (u.searchParams.get("seenCats") || "")
+    .split(",")
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
 
-  const localBank = buildMegaBank();                // huge, curated + templates
-  const fresh = await maybeFetchWikidataWords(config).catch(() => null); // optional spice
+  const seenWordsSet = new Set(seenWords);
+  const seenCatsSet = new Set(seenCats);
 
-  const bank = mergeBanks(localBank, fresh);
-
-  const puzzle = generatePuzzle(bank, config);
-
+  const puzzle = await buildPuzzle(difficulty, seenWordsSet, seenCatsSet);
   return json(puzzle);
-}
-
-/* ------------------------------ helpers ------------------------------ */
-
-function json(obj) {
-  return new Response(JSON.stringify(obj), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
-}
-
-function clampInt(v, min, max, fallback) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(n)));
-}
-
-function slug(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/['"]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-}
-
-function sample(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function shuffle(a) {
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-/* ------------------------------ bank building ------------------------------ */
-
-function mergeBanks(localBank, fresh) {
-  if (!fresh) return localBank;
-
-  // Add a few “fresh” categories built from fresh pools
-  // This keeps logic valid: categories are “members of X list”
-  const add = [];
-
-  if (fresh.people?.length >= 12) {
-    add.push({
-      id: "fresh-people",
-      colorBias: "BLUE",
-      category: "FRESH PULL: NOTABLE PEOPLE",
-      words: uniq(sampleN(fresh.people, 20)).map(w => w.toUpperCase()),
-      type: "set",
-    });
-  }
-
-  if (fresh.places?.length >= 12) {
-    add.push({
-      id: "fresh-places",
-      colorBias: "GREEN",
-      category: "FRESH PULL: PLACES",
-      words: uniq(sampleN(fresh.places, 20)).map(w => w.toUpperCase()),
-      type: "set",
-    });
-  }
-
-  if (fresh.things?.length >= 12) {
-    add.push({
-      id: "fresh-things",
-      colorBias: "PURPLE",
-      category: "FRESH PULL: THINGS",
-      words: uniq(sampleN(fresh.things, 20)).map(w => w.toUpperCase()),
-      type: "set",
-    });
-  }
-
-  return [...localBank, ...add];
-}
-
-function buildMegaBank() {
-  const bank = [];
-
-  // ---- Curated “sets” (big lists you can pull 4 from)
-  // Keep them broad so you don’t repeat fast.
-
-  bank.push(setCat("minecraft-dimensions", "MINECRAFT DIMENSIONS", [
-    "NETHER","END","OVERWORLD","AETHER","TWILIGHT","DEEP DARK","END CITY","BASALT DELTAS","CRIMSON FOREST","WARPED FOREST",
-  ]));
-
-  bank.push(setCat("minecraft-items", "MINECRAFT ITEMS", [
-    "ELYTRA","BEACON","ANVIL","OBSIDIAN","TOTEM","TRIDENT","SHULKER","ENDER PEARL","NETHERITE","REDSTONE","ENCHANTING TABLE","SPAWNER",
-  ]));
-
-  bank.push(setCat("pokemon-types", "POKÉMON TYPES", [
-    "GHOST","DRAGON","FAIRY","STEEL","PSYCHIC","DARK","FIRE","WATER","GRASS","ICE","GROUND","FLYING",
-  ]));
-
-  bank.push(setCat("marvel-heroes", "MARVEL HEROES", [
-    "IRON MAN","THOR","HULK","WANDA","VISION","SPIDER-MAN","BLACK PANTHER","HAWKEYE","DEADPOOL","LOKI","CAPTAIN MARVEL","ANT-MAN",
-  ]));
-
-  bank.push(setCat("star-wars-places", "STAR WARS PLANETS", [
-    "ENDOR","TATOOINE","HOTH","NABOO","CORUSCANT","KAMINO","MUSTAFAR","DAGOBAH","JAKKU","KASHYYYK","GEONOSIS","ALDERAAN",
-  ]));
-
-  bank.push(setCat("internet-slang", "INTERNET SLANG", [
-    "RIZZ","BASED","NO CAP","SUS","COPE","LURK","BAIT","GLOWUP","RATIO","IYKYK","MAIN CHARACTER","TOUCH GRASS",
-  ]));
-
-  bank.push(setCat("weapons-medieval", "MEDIEVAL WEAPONS", [
-    "LONGSWORD","CUTLASS","RAPIER","HALBERD","MACE","FLAIL","SPEAR","AXE","DAGGER","WARHAMMER","SCIMITAR","CROSSBOW",
-  ]));
-
-  bank.push(setCat("weapons-modern", "MODERN WEAPONS (TERMS)", [
-    "CARBINE","SUPPRESSOR","MAGAZINE","BAYONET","CALIBER","OPTIC","STOCK","TRIGGER","HOLSTER","SCOPE","MUZZLE","FOREGRIP",
-  ]));
-
-  bank.push(setCat("colors-weird", "OBSCURE COLOR NAMES", [
-    "CERULEAN","PERIWINKLE","PUCE","TAUPE","OCHRE","VERMILION","MALACHITE","SAFFRON","FUCHSIA","ALABASTER","CHARTREUSE","AUBURN",
-  ]));
-
-  bank.push(setCat("gen-z-words", "GEN-Z TERMS", [
-    "SITUATIONSHIP","ICK","DELU-LU","SLAY","BET","CAP","GIVING","ATE","POV","STAN","DRIP","CORE",
-  ]));
-
-  bank.push(setCat("video-game-boss-vibes", "VIDEO GAME BOSS VIBES", [
-    "ENRAGE","PHASE TWO","AOE","DPS CHECK","RAGE TIMER","MINIONS","ONE-SHOT","TELEGRAPH","IMMUNE","DOT","STUN","AGGRO",
-  ]));
-
-  // ---- Template generators (near infinite)
-
-  bank.push(templateCat("prefix-mega", "WORDS THAT START WITH “MEGA”", () => prefixWords("MEGA", 40)));
-  bank.push(templateCat("prefix-anti", "WORDS THAT START WITH “ANTI”", () => prefixWords("ANTI", 40)));
-  bank.push(templateCat("suffix-core", "WORDS THAT END WITH “CORE”", () => suffixWords("CORE", 40)));
-  bank.push(templateCat("suffix-gate", "SCANDALS ENDING IN “-GATE”", () => suffixWords("GATE", 30)));
-
-  bank.push(templateCat("add-letter-foot", "ADD A LETTER: FOOT PARTS → CHAOS", () =>
-    addLetterCategory(["TOE","HEEL","ARCH","SOLE"], ["TOEZ","HEELO","ARCHH","SOLEK","TOEK","HEELA","ARCHX","SOLED"])
-  ));
-
-  bank.push(templateCat("portmanteaus", "PORTMANTEAUS", () =>
-    ["CHILLAX","STAYCATION","MANSPLAIN","COSPLAY","SPORK","BRUNCH","SMOG","FRENEMY","BROMANCE","HANGRY","EDUTAIN","SITCOM"]
-  ));
-
-  bank.push(templateCat("homophones", "HOMOPHONE PAIRS", () => {
-    // We generate pairs and then sample 4 from the pool
-    const pairs = [
-      ["SCENT","SENT"],["WAIST","WASTE"],["PAIL","PALE"],["WEAK","WEEK"],["KNIGHT","NIGHT"],
-      ["SEA","SEE"],["PAIR","PARE"],["STAIR","STARE"],["WRING","RING"],["HOLE","WHOLE"],
-    ];
-    return pairs.flat().map(x => x.toUpperCase());
-  }));
-
-  bank.push(templateCat("movie-quotes-words", "WORDS FOUND IN CLASSIC MOVIE QUOTES", () => {
-    const pool = [
-      "MATRIX","CHOICE","SPOON","FORCE","HOPE","FATHER","RUN","FIGHT","LOVE","TRUTH","ALIEN","MAYHEM",
-      "FRIEND","ENEMY","CHAOS","DESTINY","FREEDOM","DREAM","REAL","GHOST","TIME","SPACE","RETURN","GAME",
-    ];
-    return pool;
-  }));
-
-  bank.push(templateCat("fake-but-valid", "FAKE WORDS THAT FEEL REAL", () => {
-    // These are “allowed” because the category *defines* them.
-    const pool = [
-      "KANKLE","GLOMP","SHLORP","YEETIFY","CRINGELORD","DOOMSCROLL","VIBRANIUM","SHADOWBAN","RETCON","SUBTWEET",
-      "MOONCRAFT","EMBERCRAFT","PIXELCRAFT","DREAMCRAFT","CLICKBAIT","SPOILERCIDE","MEMETIC","GLITCHTIDE",
-    ];
-    return pool.map(x => x.toUpperCase());
-  }));
-
-  // ---- Expandable “topic buckets” that rotate wording and lists
-  bank.push(...fandomBuckets());
-  bank.push(...nerdBuckets());
-  bank.push(...languageBuckets());
-
-  return bank;
-}
-
-function setCat(id, category, words, colorBias=null) {
-  return {
-    id,
-    type: "set",
-    colorBias,
-    category,
-    words: uniq(words).map(w => String(w).toUpperCase()),
-  };
-}
-
-function templateCat(id, category, makeWords, colorBias=null) {
-  return {
-    id,
-    type: "template",
-    colorBias,
-    category,
-    makeWords,
-  };
-}
-
-function uniq(a){
-  const out = [];
-  const seen = new Set();
-  for(const x of a){
-    const k = String(x).toUpperCase().trim();
-    if(!k) continue;
-    if(seen.has(k)) continue;
-    seen.add(k);
-    out.push(k);
-  }
-  return out;
-}
-
-function sampleN(arr, n){
-  const a = [...arr];
-  shuffle(a);
-  return a.slice(0, n);
-}
-
-function prefixWords(prefix, target=30){
-  // Mix “real-ish” and nerdy words so it’s not the same boring dictionary lines.
-  const stems = [
-    "CITY","STORE","STAR","LITH","BYTE","BOSS","CHURCH","PHONE","WORLD","DRIVE","MIND","LORD","BUILD","TONE","THREAD","MOTION",
-    "SCOPE","CHAD","DOME","VERSE","DUNGEON","ARC","QUEST","GLITCH","WAVE","PIXEL","FORCE","METER","MACHINE","BEAM","DROP","HYPE",
-  ];
-  const pool = [];
-  for(const s of stems){
-    pool.push(prefix + s);
-  }
-  // add a few “real” ones
-  ["MEGAPHONE","MEGASTORE","MEGACITY","MEGATON","MEGABYTE","MEGASTAR","MEGACHURCH","MEGALITH"].forEach(x => pool.push(x));
-  return uniq(pool).slice(0, target);
-}
-
-function suffixWords(suffix, target=30){
-  const stems = [
-    "HARD","SOFT","IRON","SALT","FATE","DREAM","MEME","CHAOS","NOVA","GEEK","DOOM","STAR","WIND","CLOUD","NEON","PIXEL",
-    "DRAMA","FANDOM","SKILL","NIGHT","SPOILER","RAGE","QUEST","VOID","MOON","SHADOW","VIBE","CRINGE",
-  ];
-  const pool = stems.map(s => s + suffix);
-  return uniq(pool).slice(0, target);
-}
-
-function addLetterCategory(base, variants){
-  // base is canonical. variants are plausible mutated forms.
-  return uniq([...base, ...variants]).slice(0, 40).map(x => x.toUpperCase());
-}
-
-function fandomBuckets(){
-  const buckets = [];
-
-  const franchises = [
-    { id:"lotr", name:"LORD OF THE RINGS THINGS", words:["RING","MORDOR","GONDOR","SHIRE","NAZGUL","PALANTIR","HOBBIT","ENT","ORC","ELF","DWARF","MITHRIL"] },
-    { id:"harry", name:"HARRY POTTER THINGS", words:["HORCRUX","AUROR","HOWLER","PATRONUS","SNITCH","AZKABAN","MUGGLE","WAND","POTION","SQUIB","HAGRID","SLYTHERIN"] },
-    { id:"pokemon-items", name:"POKÉMON ITEMS", words:["POTION","RARE CANDY","MASTER BALL","REPEL","POKEDEX","TM","BERRY","NUGGET","REVIVE","ELIXIR","ULTRA BALL","EVERSTONE"] },
-    { id:"zelda", name:"ZELDA THINGS", words:["HYRULE","TRIFORCE","RUPEE","KOKIRI","SHEIKAH","MASTER SWORD","GANON","Epona","BOMB","BOOMERANG","HOOKSHOT","Ocarina"] },
-    { id:"halo", name:"HALO WORDS", words:["SPARTAN","CORTANA","RINGWORLD","FLOOD","ELITE","WRAITH","NEEDLER","WARTHOG","ODST","UNSC","REACH","FORERUNNER"] },
-  ];
-
-  for(const f of franchises){
-    buckets.push(setCat(`fandom-${f.id}`, f.name, f.words));
-  }
-
-  return buckets;
-}
-
-function nerdBuckets(){
-  const buckets = [];
-
-  buckets.push(setCat("math-terms", "MATH WORDS", [
-    "COSINE","TANGENT","ARC","VECTOR","MATRIX","PROOF","LEMMA","INTEGRAL","FACTOR","PRIME","MODULO","SERIES"
-  ]));
-
-  buckets.push(setCat("software-terms", "SOFTWARE DEV WORDS", [
-    "REFACTOR","COMMIT","BRANCH","MERGE","REBASE","PATCH","HOTFIX","ROLLBACK","DEPLOY","BUILD","RELEASE","REGRESSION"
-  ]));
-
-  buckets.push(setCat("story-terms", "STORY TERMS", [
-    "CANON","RETCON","SEQUEL","REBOOT","ARC","CLIMAX","FORESHADOW","TROPE","MACGUFFIN","PLOT HOLE","PROLOGUE","EPILOGUE"
-  ]));
-
-  return buckets;
-}
-
-function languageBuckets(){
-  const buckets = [];
-
-  buckets.push(setCat("big-words", "OBNOXIOUSLY BIG WORDS", [
-    "DEFENESTRATION","PERSPICACIOUS","PERNICIOUS","PUSILLANIMOUS","OBFUSCATE","SESQUIPEDALIAN","MENDACIOUS","CONFLAGRATION",
-    "OBSEQUIOUS","PERAMBULATE","PANDEMONIUM","INEFFABLE"
-  ]));
-
-  buckets.push(templateCat("rhymes-ish", "NEAR RHYMES", () => {
-    const pool = ["SPLICE","SPICE","SLICE","DICE","VICE","RICE","MICE","NICE","TWICE","PRICE","BRICE","ICE"];
-    return uniq(pool).map(x => x.toUpperCase());
-  }));
-
-  return buckets;
-}
-
-/* ------------------------------ puzzle generation ------------------------------ */
-
-function generatePuzzle(bank, config){
-  // We need 4 groups of 4. Each group comes from a category source.
-  // Avoid repeats using config.recentSet.
-  const attempts = config.maxAttempts;
-
-  for(let a=0; a<attempts; a++){
-    const chosenCats = pickFourCategories(bank, config);
-    if(!chosenCats) continue;
-
-    const groups = [];
-    const usedWords = new Set();
-
-    let ok = true;
-    for(const cat of chosenCats){
-      const pulled = pullFourWords(cat, usedWords, config);
-      if(!pulled){ ok = false; break; }
-
-      groups.push({
-        color: pickColor(groups.length),
-        category: cat.category,
-        words: pulled
-      });
-      pulled.forEach(w => usedWords.add(w));
-    }
-    if(!ok) continue;
-
-    // Make tiles
-    const tiles = [];
-    groups.forEach((g, gi) => {
-      g.words.forEach(w => tiles.push({ word: w, groupIndex: gi }));
-    });
-
-    // Shuffle tiles for gameplay
-    shuffle(tiles);
-
-    // Save “seen” tokens into response so client can store it
-    const seenTokens = [];
-    for(const g of groups){
-      seenTokens.push("cat:" + slug(g.category));
-      g.words.forEach(w => seenTokens.push("w:" + slug(w)));
-    }
-
-    return { groups, tiles, seen: seenTokens };
-  }
-
-  // If everything fails, fallback to a safe deterministic puzzle
-  return fallbackPuzzle();
-}
-
-function pickColor(i){
-  return ["YELLOW","GREEN","BLUE","PURPLE"][i] || "YELLOW";
-}
-
-function pickFourCategories(bank, config){
-  const pool = [...bank];
-
-  // Avoid recently used categories hard
-  const filtered = pool.filter(c => {
-    if(!config.avoidRecent) return true;
-    const token = "cat:" + slug(c.category);
-    return !config.recentSet.has(token);
-  });
-
-  // If too strict, relax
-  const source = filtered.length >= 12 ? filtered : pool;
-
-  shuffle(source);
-
-  // Prefer templates more at high difficulty to create variety
-  const wantTemplates = config.difficulty >= 4 ? 2 : config.difficulty === 3 ? 1 : 0;
-
-  const picked = [];
-  let templatesPicked = 0;
-
-  for(const c of source){
-    if(picked.length === 4) break;
-
-    const isTemplate = c.type === "template";
-    if(isTemplate && templatesPicked >= wantTemplates && Math.random() < 0.55) continue;
-
-    // prevent same id duplicates
-    if(picked.some(p => p.id === c.id)) continue;
-
-    picked.push(c);
-    if(isTemplate) templatesPicked++;
-  }
-
-  if(picked.length !== 4) return null;
-  return picked;
-}
-
-function pullFourWords(cat, usedWords, config){
-  let words = [];
-
-  if(cat.type === "set"){
-    words = cat.words;
-  } else if(cat.type === "template"){
-    words = cat.makeWords();
-  } else {
-    return null;
-  }
-
-  words = uniq(words).map(x => String(x).toUpperCase());
-
-  // Avoid words recently seen
-  if(config.avoidRecent){
-    words = words.filter(w => !config.recentSet.has("w:" + slug(w)));
-  }
-
-  // Avoid words already used in this puzzle
-  words = words.filter(w => !usedWords.has(w));
-
-  // Need at least 4
-  if(words.length < 4) return null;
-
-  // Higher difficulty: increase overlap bait by adding a “decoy-ish” chance
-  // (but still valid because we only pick from one true category)
-  // The overlap comes from the category *design*, not cheating.
-
-  const picked = sampleN(words, 4);
-
-  // sanity: all unique, not blank
-  if(new Set(picked).size !== 4) return null;
-
-  return picked;
-}
-
-function fallbackPuzzle(){
-  const groups = [
-    { color:"YELLOW", category:"MINECRAFT ITEMS", words:["ELYTRA","BEACON","ANVIL","OBSIDIAN"] },
-    { color:"GREEN", category:"STORY TERMS", words:["CANON","RETCON","SEQUEL","REBOOT"] },
-    { color:"BLUE", category:"INTERNET SLANG", words:["RIZZ","BASED","SUS","NO CAP"] },
-    { color:"PURPLE", category:"MEDIEVAL WEAPONS", words:["LONGSWORD","RAPIER","HALBERD","DAGGER"] },
-  ];
-  const tiles = [];
-  groups.forEach((g, gi) => g.words.forEach(w => tiles.push({ word:w, groupIndex: gi })));
-  shuffle(tiles);
-  const seen = [];
-  groups.forEach(g => {
-    seen.push("cat:" + slug(g.category));
-    g.words.forEach(w => seen.push("w:" + slug(w)));
-  });
-  return { groups, tiles, seen };
-}
-
-/* ------------------------------ optional wikidata ------------------------------ */
-/*
-  This is deliberately minimal so it won’t break your app.
-  It fetches *labels* for a few entity types. If it fails, we just ignore it.
-
-  If you want bigger firehose later: we can add multiple endpoints + caching.
-*/
-
-async function maybeFetchWikidataWords(config){
-  if(Math.random() > config.wikidataChance) return null;
-
-  const people = await wikidataQuery(`
-    SELECT ?itemLabel WHERE {
-      ?item wdt:P31 wd:Q5 .
-      ?item wdt:P106 ?occ .
-    }
-    LIMIT 60
-  `);
-
-  const places = await wikidataQuery(`
-    SELECT ?itemLabel WHERE {
-      ?item wdt:P31/wdt:P279* wd:Q17334923 .
-    }
-    LIMIT 60
-  `);
-
-  const things = await wikidataQuery(`
-    SELECT ?itemLabel WHERE {
-      ?item wdt:P31 wd:Q35120 .
-    }
-    LIMIT 60
-  `);
-
-  return {
-    people: people,
-    places: places,
-    things: things,
-  };
-}
-
-async function wikidataQuery(sparql){
-  const url = "https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(sparql);
-  const res = await fetch(url, {
-    headers: {
-      "accept": "application/sparql-results+json",
-      "user-agent": "Connected!/1.0 (educational toy)",
-    }
-  });
-  if(!res.ok) return [];
-  const j = await res.json();
-  const rows = j?.results?.bindings || [];
-  const out = [];
-  for(const r of rows){
-    const label = r.itemLabel?.value;
-    if(!label) continue;
-    // keep sane: 1–24 chars, no weird punctuation storms
-    const clean = label.replace(/\s+/g, " ").trim();
-    if(clean.length < 2 || clean.length > 24) continue;
-    out.push(clean.toUpperCase());
-  }
-  return uniq(out);
 }
