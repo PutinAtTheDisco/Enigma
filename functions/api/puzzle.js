@@ -1,568 +1,608 @@
-// functions/api/puzzle.js
-// Cloudflare Pages Functions: /api/puzzle
-// Goal: generate Connections-style puzzles that are HARD but FAIR.
-// No invisible logic. No "trust me bro" categories.
+// /functions/api/puzzle.js
+// Connected! — Puzzle generator with: massive category factories, logic validation,
+// anti-repeat history, and difficulty-tuned overlap bait.
 //
-// Query params:
-//   difficulty=1..5  (default 4)
-//   seen=comma words (optional) - client can pass recently seen words to reduce repeats
-//   seenCats=comma cat ids (optional) - client can pass recent category ids to reduce repeats
+// Works on Cloudflare Pages Functions.
+// Uses POST body: { difficulty: 1..5, avoid: [groupKey, ...] }
 
-const json = (obj, status = 200, headers = {}) =>
-  new Response(JSON.stringify(obj), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-      ...headers,
-    },
-  });
+export async function onRequest(context) {
+  const { request } = context;
 
-const clampInt = (v, min, max, fallback) => {
-  const n = Number.parseInt(v, 10);
-  if (Number.isNaN(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-};
-
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-const shuffle = (arr) => {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
+  if (request.method === "OPTIONS") {
+    return new Response("", {
+      status: 204,
+      headers: corsHeaders(),
+    });
   }
-  return arr;
-};
-
-const uniqUpper = (s) => String(s || "").trim().toUpperCase();
-
-const WORD_MAX = 12; // keep tiles readable; longer words should be avoided by generator
-
-// ---------------------------
-// BIG WORD POOLS (curated + fair)
-// ---------------------------
-
-// Keep pools compact-ish but varied.
-// Add more anytime, but keep them "solvable from the grid" style.
-
-const POOLS = {
-  // Common but crisp
-  COLORS: ["IVORY", "JADE", "AMBER", "TEAL", "MAUVE", "OCHRE", "SABLE", "TAUPE", "CORAL", "INDIGO"],
-  SHAPES: ["ARC", "RING", "CONE", "CUBE", "SPHERE", "PRISM", "TORUS", "OVAL", "WEDGE", "HELIX"],
-
-  // Language / academia
-  GREEK: ["ALPHA", "BETA", "GAMMA", "DELTA", "THETA", "LAMBDA", "SIGMA", "OMEGA"],
-  LATIN_PHRASES: ["AD HOC", "ET AL", "A PRIORI", "PER SE", "DE FACTO", "IN VIVO", "IN SITU", "EX POST"],
-  LOGIC: ["AXIOM", "LEMMA", "PROOF", "CLAIM", "COROLLARY", "THEOREM", "INFERENCE", "FALLACY"],
-  RHETORIC: ["ETHOS", "PATHOS", "LOGOS", "IRONY", "SATIRE", "HYPERBOLE", "METAPHOR", "EUPHEMISM"],
-
-  // Pop/nerd culture terms (still fair categories)
-  GAME_TERMS: ["NPC", "SPAWN", "RAID", "LOOT", "PATCH", "NERF", "BUFF", "GLITCH", "QUEST", "BOSS"],
-  COMIC: ["HERO", "VILLAIN", "ORIGIN", "CAMEO", "CANON", "RETCON", "REBOOT", "SEQUEL"],
-  MEME_SLANG: ["RIZZ", "BASED", "SUS", "COPE", "YEET", "DRIP", "NO CAP", "LURK", "BAIT", "GLOWUP"],
-
-  // Science-y but not nonsense
-  SI_BASE: ["AMPERE", "KELVIN", "SECOND", "METER", "KILOGRAM", "MOLE", "CANDELA"],
-  CHEM_SYMBOLS: ["H", "HE", "C", "N", "O", "NA", "CL", "FE", "AG", "AU", "SN", "PB"],
-  ASTRONOMY: ["ORBIT", "ECLIPSE", "NEBULA", "COMET", "GALAXY", "QUASAR", "PULSAR", "AURORA"],
-
-  // Weapons (safe list)
-  MED_WEAPONS: ["FLAIL", "MACE", "SPEAR", "DAGGER", "CUTLASS", "SCIMITAR", "HALBERD", "LONGBOW"],
-
-  // Minecraft-ish but accurate
-  MINECRAFT: ["NETHER", "END", "ELYTRA", "ANVIL", "BEACON", "OBSIDIAN", "REDSTONE", "CREEPER", "VILLAGER", "ENCHANT"],
-};
-
-// Some “made-up” words are allowed only inside specific *visible* rules.
-// Example: add a letter, spoonerize, replace vowel, etc.
-// We’ll generate those rather than storing random fake junk.
-
-// ---------------------------
-// CATEGORY GENERATORS (each returns { id, category, words, explain?, tags? })
-// Must be FAIR: relationship inferable from the 4 words themselves.
-// ---------------------------
-
-const makeCategory = (id, category, words, meta = {}) => ({
-  id,
-  category,
-  words,
-  ...meta,
-});
-
-const isGoodWord = (w) => {
-  const x = uniqUpper(w);
-  if (!x) return false;
-  if (x.length > WORD_MAX) return false;
-  // avoid strings that are only punctuation
-  if (!/[A-Z0-9]/.test(x)) return false;
-  return true;
-};
-
-const normalizeWords = (words) =>
-  words.map(uniqUpper).filter(isGoodWord);
-
-// Validators: prevent "invisible logic"
-const validators = {
-  // For homophone pairs, we must include both sides for each pair.
-  homophonePairs(words, pairs) {
-    const set = new Set(words);
-    // At least 2 pairs visible (4 words)
-    return pairs.every(([a, b]) => set.has(a) && set.has(b));
-  },
-
-  // For prefix/suffix rule, all words must share prefix/suffix visibly.
-  startsWith(words, prefix) {
-    return words.every((w) => w.startsWith(prefix));
-  },
-  endsWith(words, suffix) {
-    return words.every((w) => w.endsWith(suffix));
-  },
-
-  // For anagram set, all words must be anagrams of the same sorted letters.
-  allAnagrams(words) {
-    const key = (w) => w.replace(/\s+/g, "").split("").sort().join("");
-    const k0 = key(words[0]);
-    return words.every((w) => key(w) === k0);
-  },
-
-  // For "one-letter-off" family, all must differ by exactly one letter from a base.
-  oneLetterFromBase(words, base) {
-    const b = base.replace(/\s+/g, "");
-    const dist = (a, b) => {
-      if (a.length !== b.length) return 999;
-      let d = 0;
-      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
-      return d;
-    };
-    const clean = (w) => w.replace(/\s+/g, "");
-    return words.every((w) => dist(clean(w), b) === 1);
-  },
-};
-
-function genPrefixStarts(prefix, pool, id) {
-  // pull words from pool that start with prefix
-  const picks = shuffle(pool.map(uniqUpper).filter((w) => w.startsWith(prefix)));
-  const words = picks.slice(0, 4);
-  if (words.length < 4) return null;
-  if (!validators.startsWith(words, prefix)) return null;
-  return makeCategory(id, `WORDS THAT START WITH "${prefix}"`, words);
-}
-
-function genPrefixEnds(suffix, pool, id) {
-  const picks = shuffle(pool.map(uniqUpper).filter((w) => w.endsWith(suffix)));
-  const words = picks.slice(0, 4);
-  if (words.length < 4) return null;
-  if (!validators.endsWith(words, suffix)) return null;
-  return makeCategory(id, `WORDS THAT END WITH "${suffix}"`, words);
-}
-
-function genSetFromPool(category, pool, id) {
-  const picks = shuffle(pool.map(uniqUpper).filter(isGoodWord)).slice(0, 4);
-  if (picks.length < 4) return null;
-  return makeCategory(id, category, picks);
-}
-
-function genHomophonePairs(id) {
-  // Visible pairs only. Always.
-  const PAIRS = [
-    ["SEA", "SEE"],
-    ["KNIGHT", "NIGHT"],
-    ["PAIR", "PEAR"],
-    ["WEEK", "WEAK"],
-    ["MALE", "MAIL"],
-    ["STAKE", "STEAK"],
-    ["PAIN", "PANE"],
-    ["SENT", "SCENT"],
-    ["PLAIN", "PLANE"],
-    ["RIGHT", "WRITE"],
-    ["SON", "SUN"],
-    ["HOLE", "WHOLE"],
-  ].map(([a, b]) => [uniqUpper(a), uniqUpper(b)]);
-
-  const twoPairs = shuffle(PAIRS).slice(0, 2);
-  const words = normalizeWords([twoPairs[0][0], twoPairs[0][1], twoPairs[1][0], twoPairs[1][1]]);
-  if (words.length !== 4) return null;
-  if (!validators.homophonePairs(words, twoPairs)) return null;
-  return makeCategory(id, "HOMOPHONE PAIRS", words);
-}
-
-function genPortmanteau(id) {
-  // Visible portmanteaus, common enough to be fair.
-  const pool = ["STAYCATION", "CHILLAX", "MANSPLAIN", "FANFIC", "BRUNCH", "SPORK", "FRENEMY", "HANGRY"];
-  const words = shuffle(pool).slice(0, 4).map(uniqUpper);
-  return makeCategory(id, "PORTMANTEAUS", words);
-}
-
-function genLogicSet(id) {
-  return genSetFromPool("FORMAL LOGIC WORDS", POOLS.LOGIC, id);
-}
-
-function genRhetoricSet(id) {
-  return genSetFromPool("RHETORICAL DEVICES", POOLS.RHETORIC, id);
-}
-
-function genGreekLetters(id) {
-  const words = shuffle(POOLS.GREEK).slice(0, 4).map(uniqUpper);
-  return makeCategory(id, "GREEK LETTERS", words);
-}
-
-function genComicCanon(id) {
-  return genSetFromPool("STORY CONTINUITY TERMS", POOLS.COMIC, id);
-}
-
-function genGameTerms(id) {
-  return genSetFromPool("VIDEO GAME TERMS", POOLS.GAME_TERMS, id);
-}
-
-function genMinecraftSet(id) {
-  return genSetFromPool("MINECRAFT THINGS", POOLS.MINECRAFT, id);
-}
-
-function genWeapons(id) {
-  return genSetFromPool("MEDIEVAL WEAPONS", POOLS.MED_WEAPONS, id);
-}
-
-function genSIBase(id) {
-  const words = shuffle(POOLS.SI_BASE).slice(0, 4).map(uniqUpper);
-  return makeCategory(id, "SI BASE UNITS", words);
-}
-
-function genChemSymbols(id) {
-  const words = shuffle(POOLS.CHEM_SYMBOLS).slice(0, 4).map(uniqUpper);
-  return makeCategory(id, "CHEMICAL SYMBOLS", words);
-}
-
-function genAstronomy(id) {
-  return genSetFromPool("ASTRONOMY WORDS", POOLS.ASTRONOMY, id);
-}
-
-function genPalindrome-ish(id) {
-  // Fair: words that become a different word when reversed is NOT fair.
-  // Instead: actual palindromes or known ones.
-  const pool = ["LEVEL", "RADAR", "CIVIC", "ROTOR", "KAYAK", "REFER"];
-  const words = shuffle(pool).slice(0, 4).map(uniqUpper);
-  return makeCategory(id, "PALINDROMES", words);
-}
-
-function genOneLetterOff(id) {
-  // Choose a base word and create 4 variants differing by one letter.
-  const bases = ["STONE", "PLANE", "CABLE", "TRACE", "SCORE", "RANGE", "SPORE"];
-  const base = pick(bases).toUpperCase();
-  // build variants by swapping one position
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const mk = (pos, ch) => base.slice(0, pos) + ch + base.slice(pos + 1);
-  const variants = new Set();
-  while (variants.size < 4) {
-    const pos = Math.floor(Math.random() * base.length);
-    const ch = alphabet[Math.floor(Math.random() * alphabet.length)];
-    if (ch === base[pos]) continue;
-    variants.add(mk(pos, ch));
-  }
-  const words = [...variants].map(uniqUpper);
-  if (!validators.oneLetterFromBase(words, base)) return null;
-  return makeCategory(id, `ONE-LETTER CHANGES OF "${base}"`, words);
-}
-
-function genStartsWithMega(id) {
-  // Make sure these are real-ish or at least consistent and readable.
-  const pool = ["MEGAPHONE", "MEGACITY", "MEGASTAR", "MEGATON", "MEGABYTE", "MEGALITH", "MEGASTORE", "MEGAPLEX"];
-  return genPrefixStarts("MEGA", pool, id);
-}
-
-function genEndsWithCraft(id) {
-  // Your nerd heart asked for it.
-  const pool = ["MOONCRAFT", "EMBERCRAFT", "DREAMCRAFT", "PIXELCRAFT", "STARCRAFT", "WITCHCRAFT", "HANDCRAFT", "SOULCRAFT"];
-  return genPrefixEnds("CRAFT", pool, id);
-}
-
-function genSlangSet(id) {
-  return genSetFromPool("INTERNET SLANG", POOLS.MEME_SLANG, id);
-}
-
-// Scholar-y wordplay that stays fair:
-function genHiddenWord(id) {
-  // The category is: "CONTAINS ___"
-  // All 4 words contain the same trigram.
-  const chunks = ["ARC", "ION", "MAL", "TAR", "RIZ", "NETH", "LOG", "THE"];
-  const chunk = pick(chunks).toUpperCase();
-
-  // Build words that contain the chunk; mix real + plausible, but keep readable.
-  // Avoid going too fake: we use a small curated bank per chunk.
-  const bank = {
-    ARC: ["ARCH", "ARCADE", "MONARCH", "SEARCH"],
-    ION: ["IONIC", "POTION", "LION", "UNION"],
-    TAR: ["STAR", "TAROT", "GUITAR", "TARMAC"],
-    LOG: ["LOGIC", "PROLOG", "CATALOG", "BLOG"],
-    THE: ["THEME", "THEORY", "THESIS", "THEATER"],
-    MAL: ["MALICE", "NORMAL", "ANOMALY", "MALLET"],
-    RIZ: ["RIZZ", "BRIZ", "RIZZO", "RIZAL"], // okay, spicy
-    NETH: ["NETHER", "ANETH", "NETHIN", "NETHERS"], // will be validated by length
-  };
-
-  const pool = (bank[chunk] || []).map(uniqUpper).filter(isGoodWord);
-  if (pool.length < 4) return null;
-  const words = shuffle(pool).slice(0, 4);
-  // visible validation
-  if (!words.every((w) => w.includes(chunk))) return null;
-  return makeCategory(id, `CONTAINS "${chunk}"`, words);
-}
-
-// ---------------------------
-// “Freshness” source (Wikidata labels)
-// We keep this optional + safe.
-// We only use it to build one category: "FAMOUS ___ (FROM WIKIDATA)" with strict rules.
-// ---------------------------
-
-async function fetchWikidataLabels(limit = 40) {
-  // Pull English labels for random-ish items via a generic query.
-  // Guard: if fetch fails, we just return [].
-  const endpoint = "https://query.wikidata.org/sparql";
-  const query = `
-    SELECT ?item ?itemLabel WHERE {
-      ?item wdt:P31 ?type .
-      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-    } LIMIT ${Math.max(10, Math.min(80, limit))}
-  `;
 
   try {
-    const url = endpoint + "?format=json&query=" + encodeURIComponent(query);
-    const res = await fetch(url, {
-      headers: { "user-agent": "Connected!/CF Pages Function" },
+    const payload = await safeJson(request);
+    const difficulty = clampInt(payload?.difficulty ?? 4, 1, 5, 4);
+
+    // Avoid list: group keys already seen on this device
+    const avoid = new Set(Array.isArray(payload?.avoid) ? payload.avoid.slice(0, 2500) : []);
+
+    const config = difficultyConfig(difficulty);
+
+    // Generate 4 valid groups, with controlled overlap bait.
+    const puzzle = await buildPuzzle({ config, avoid });
+
+    return json(puzzle, 200);
+  } catch (e) {
+    return json({ error: String(e?.message || e) }, 500);
+  }
+}
+
+/* ------------------------- Core puzzle build ------------------------- */
+
+async function buildPuzzle({ config, avoid }) {
+  // Candidate groups: we generate a LOT, validate, filter by avoid, then pick.
+  const candidates = await generateCandidates(config);
+
+  const fresh = candidates.filter(g => !avoid.has(g.key));
+
+  // If user has played a ton and we filtered too hard, fall back gracefully.
+  const pool = fresh.length >= 60 ? fresh : candidates;
+
+  // Pick 4 groups that don't share exact same words too much (unless brutal).
+  const picked = pickFourGroups(pool, config);
+
+  // Create tiles and shuffle
+  const tiles = [];
+  picked.forEach((g, groupIndex) => {
+    g.words.forEach(w => tiles.push({ word: w, groupIndex }));
+  });
+
+  shuffleInPlace(tiles);
+
+  // Return shape expected by app.js
+  return {
+    generatedAt: Date.now(),
+    difficulty: config.level,
+    groups: picked.map(g => ({
+      color: g.color,
+      category: g.title,
+      words: g.words,
+      key: g.key, // important: used by client to avoid repeats
+    })),
+    tiles
+  };
+}
+
+function pickFourGroups(pool, config) {
+  // We want: sensible, varied, and difficult. Brutal can allow “bait overlap,”
+  // but still must be logically solvable.
+  const colors = ["YELLOW", "GREEN", "BLUE", "PURPLE"];
+
+  // Score groups by “hardness” and “freshness vibe”
+  const scored = pool
+    .map(g => ({ g, score: groupScore(g, config) }))
+    .sort((a, b) => b.score - a.score);
+
+  const picked = [];
+  const usedWords = new Map(); // word -> count
+  const usedDomains = new Set();
+
+  for (const { g } of scored) {
+    if (picked.length >= 4) break;
+
+    // Avoid repeating same domain too much (unless brutal)
+    if (!config.allowDomainRepeats && usedDomains.has(g.domain)) continue;
+
+    // Ensure word uniqueness across groups on easier modes
+    if (!config.allowWordOverlap) {
+      const overlaps = g.words.filter(w => usedWords.has(w));
+      if (overlaps.length) continue;
+    } else {
+      // Brutal: allow overlap bait occasionally, but not full collisions
+      const overlaps = g.words.filter(w => usedWords.has(w));
+      if (overlaps.length > config.maxOverlapAcrossGroups) continue;
+    }
+
+    picked.push({
+      ...g,
+      color: colors[picked.length],
     });
+
+    usedDomains.add(g.domain);
+    for (const w of g.words) usedWords.set(w, (usedWords.get(w) || 0) + 1);
+  }
+
+  // If we still didn't get 4, loosen constraints (rare)
+  if (picked.length < 4) {
+    for (const { g } of scored) {
+      if (picked.length >= 4) break;
+      if (picked.some(x => x.key === g.key)) continue;
+
+      const overlaps = g.words.filter(w => picked.some(pg => pg.words.includes(w)));
+      if (overlaps.length > 0 && !config.allowWordOverlap) continue;
+
+      picked.push({
+        ...g,
+        color: colors[picked.length],
+      });
+    }
+  }
+
+  if (picked.length < 4) {
+    throw new Error("Not enough valid categories generated. Increase pools.");
+  }
+
+  return picked;
+}
+
+/* ------------------------- Category generation ------------------------- */
+
+// We generate thousands of category possibilities via “factories”.
+// This is how you get 1500+ categories WITHOUT hand-writing 1500 entries.
+// Also: validation prevents nonsense.
+
+async function generateCandidates(config) {
+  const candidates = [];
+
+  // Domain vocab pools (intentionally huge-ish, but still lightweight)
+  const POOLS = buildPools();
+
+  // Factory list: each factory can emit many categories.
+  const factories = buildFactories(POOLS);
+
+  // Generate a lot, then validate.
+  const target = config.candidateCount;
+
+  // Mix in a tiny bit of “fresh” from the internet sometimes (optional)
+  // This helps variety without relying on it.
+  const fresh = await maybeFetchFreshTokens(config);
+  if (fresh.length) POOLS.FRESH = fresh;
+
+  for (let i = 0; i < target; i++) {
+    const f = factories[randInt(factories.length)];
+    const g = f();
+
+    if (!g) continue;
+
+    // Validation layer: prevent your “classic movie quote words” nonsense
+    if (!validateGroup(g, POOLS)) continue;
+
+    // Keep categories mostly unique
+    candidates.push(g);
+  }
+
+  // Deduplicate by key
+  const seen = new Set();
+  const deduped = [];
+  for (const g of candidates) {
+    if (seen.has(g.key)) continue;
+    seen.add(g.key);
+    deduped.push(g);
+  }
+
+  // Make sure we have enough
+  if (deduped.length < 120) {
+    // If this happens, your generator became too strict. Loosen validation.
+    // For now, throw to make debugging obvious.
+    throw new Error("Category generator too strict; not enough candidates.");
+  }
+
+  return deduped;
+}
+
+function validateGroup(g, POOLS) {
+  if (!g) return false;
+  if (!g.title || typeof g.title !== "string") return false;
+  if (!g.domain) return false;
+  if (!Array.isArray(g.words) || g.words.length !== 4) return false;
+
+  // Normalize / reject empty words
+  const words = g.words.map(w => String(w).trim()).filter(Boolean);
+  if (words.length !== 4) return false;
+
+  // Reject duplicates within a group
+  const set = new Set(words.map(w => w.toUpperCase()));
+  if (set.size !== 4) return false;
+
+  // Reject “category says X but words don't match X” by requiring a proof function
+  if (typeof g.proof === "function") {
+    try {
+      if (!g.proof(words, POOLS)) return false;
+    } catch {
+      return false;
+    }
+  }
+
+  // Title sanity
+  if (g.title.length < 4) return false;
+
+  return true;
+}
+
+/* ------------------------- Pools + Factories ------------------------- */
+
+function buildPools() {
+  // These pools are designed to yield THOUSANDS of valid categories when combined.
+  // The factories remix them into stumping categories with real logic checks.
+
+  const SLANG = [
+    "RIZZ","YEET","NO CAP","BASED","MID","DRIP","SUS","COPE","LURK","RATIO",
+    "GLOWUP","SALTY","CRINGE","SIMP","GOAT","W","L","STAN","DEADASS","BET"
+  ];
+
+  const GAMING = [
+    "NPC","BUFF","NERF","AGGRO","DPS","HEAL","TANK","LOOT","GRIND","RAID",
+    "PATCH","GLITCH","META","SWEAT","SMURF","RESPAWN","SPEEDRUN","K/D"
+  ];
+
+  const MINECRAFT = [
+    "NETHER","END","ELYTRA","BEACON","ANVIL","OBSIDIAN","REDSTONE","SPAWNER",
+    "VILLAGER","ENCHANT","POTION","CREEPER","DIAMOND","EMERALD","ENDER PEARL"
+  ];
+
+  const FANTASY = [
+    "LONGSWORD","MACE","FLAIL","SCIMITAR","HALBERD","RAPIER","SPEAR","DAGGER",
+    "BASILISK","WYVERN","DRAGON","GRIMOIRE","ELDRITCH","PHYLactery".toUpperCase()
+  ];
+
+  const SCIENCE = [
+    "COSINE","TANGENT","VECTOR","MOMENTUM","ENTROPY","ISOTOPE","IONIC","COVALENT",
+    "QUARK","NEUTRINO","SPECTRUM","FRACTAL","PRIME","INERTIA","FREQUENCY"
+  ];
+
+  const BIG_WORDS = [
+    "PERNICIOUS","OBDURATE","PERSpicacious".toUpperCase(),"LOQUACIOUS","FASTIDIOUS",
+    "OBFUSCATE","MENDACIOUS","DELETERIOUS","UBIQUITOUS","SYCOPHANT","INEFFABLE"
+  ];
+
+  // Real homophone PAIRS: we store as pairs so the category logic is correct.
+  const HOMOPHONE_PAIRS = [
+    ["WEEK","WEAK"],
+    ["PAIR","PEAR"],
+    ["KNIGHT","NIGHT"],
+    ["SEA","SEE"],
+    ["WAIST","WASTE"],
+    ["SENT","SCENT"],
+    ["BARE","BEAR"],
+    ["PALE","Pail".toUpperCase()], // PALE / PAIL
+  ].map(([a,b]) => [a.toUpperCase(), b.toUpperCase()]);
+
+  // “Add a letter” / “swap a letter” base tokens
+  const BODY_PARTS = ["TOE","HEEL","ARCH","SOLE","ANKLE","CALF","KNEE","WRIST","PALM","ELBOW"];
+  const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+  // Fandom/Pop culture tokens (not character names, not deep IP):
+  const FANDOM = [
+    "AVENGER","JEDI","SITH","HOBBIT","WIZARD","CYBORG","MUTANT","SPARTAN",
+    "KAIJU","VAMPIRE","WEREWOLF","ANDROID","ALIEN","PIRATE","NINJA"
+  ];
+
+  // Wordplay-friendly roots to create “fake but solvable” items
+  const MORPHEMES = [
+    "MEGA","NANO","HYPER","ULTRA","DARK","NEO","RETRO","AERO","PYRO","CRYO",
+    "LUNA","SOLAR","VOID","PIXEL","DREAM","EMBER","MOON","STAR","NOVA","ARC"
+  ];
+
+  return {
+    SLANG, GAMING, MINECRAFT, FANTASY, SCIENCE, BIG_WORDS,
+    HOMOPHONE_PAIRS, BODY_PARTS, LETTERS, FANDOM, MORPHEMES
+  };
+}
+
+function buildFactories(POOLS) {
+  const factories = [];
+
+  // 1) DOMAIN: Straight semantic categories (high quality)
+  factories.push(() => pickFromPool("INTERNET SLANG", "slang", POOLS.SLANG));
+  factories.push(() => pickFromPool("GAMING TERMS", "gaming", POOLS.GAMING));
+  factories.push(() => pickFromPool("MINECRAFT THINGS", "minecraft", POOLS.MINECRAFT));
+  factories.push(() => pickFromPool("FANTASY WEAPONS & MONSTERS", "fantasy", POOLS.FANTASY));
+  factories.push(() => pickFromPool("SCIENCE/MATH TERMS", "science", POOLS.SCIENCE));
+  factories.push(() => pickFromPool("BIG, RUDE WORDS", "words", POOLS.BIG_WORDS));
+
+  // 2) WORDPLAY: Homophone pairs (logic-correct)
+  factories.push(() => homophonePairsFactory(POOLS));
+
+  // 3) WORDPLAY: Start-with / end-with (generates hundreds of categories)
+  factories.push(() => startsWithFactory(POOLS));
+  factories.push(() => endsWithFactory(POOLS));
+
+  // 4) WORDPLAY: Add-one-letter-to-body-part (your “kankle” style, but solvable)
+  factories.push(() => addLetterBodyPartsFactory(POOLS));
+
+  // 5) WORDPLAY: Portmanteau-ish / morpheme mashups (solvable because category tells you)
+  factories.push(() => morphemeMashFactory(POOLS));
+
+  // 6) HARD MODE: “Belongs to two domains” bait (still valid, just mean)
+  factories.push(() => crossDomainBaitFactory(POOLS));
+
+  // 7) Fresh tokens (optional if fetched)
+  factories.push(() => {
+    if (!Array.isArray(POOLS.FRESH) || POOLS.FRESH.length < 10) return null;
+    return pickFromPool("FRESH PULLS (LIVE)", "fresh", POOLS.FRESH);
+  });
+
+  return factories;
+}
+
+/* ------------------------- Factory helpers ------------------------- */
+
+function pickFromPool(title, domain, pool) {
+  if (!pool || pool.length < 8) return null;
+  const words = pickFourUnique(pool);
+  return finalizeGroup({
+    title,
+    domain,
+    words,
+    proof: (ws, POOLS) => ws.every(w => pool.map(x => x.toUpperCase()).includes(w.toUpperCase()))
+  });
+}
+
+function homophonePairsFactory(POOLS) {
+  const pairs = POOLS.HOMOPHONE_PAIRS;
+  if (!pairs || pairs.length < 4) return null;
+
+  // Choose 2 pairs -> 4 words (A,B,C,D) where each word has a homophone among the set.
+  const p1 = pairs[randInt(pairs.length)];
+  let p2 = pairs[randInt(pairs.length)];
+  let guard = 0;
+  while ((p2[0] === p1[0] || p2[0] === p1[1] || p2[1] === p1[0] || p2[1] === p1[1]) && guard++ < 20) {
+    p2 = pairs[randInt(pairs.length)];
+  }
+
+  const words = shuffleInPlace([p1[0], p1[1], p2[0], p2[1]]).slice(0, 4);
+
+  return finalizeGroup({
+    title: "HOMOPHONE PAIRS",
+    domain: "wordplay",
+    words,
+    proof: (ws, POOLS) => {
+      const set = new Set(ws.map(x => x.toUpperCase()));
+      // Must contain exactly two known pairs
+      let pairCount = 0;
+      for (const [a,b] of POOLS.HOMOPHONE_PAIRS) {
+        if (set.has(a) && set.has(b)) pairCount++;
+      }
+      return pairCount === 2;
+    }
+  });
+}
+
+function startsWithFactory(POOLS) {
+  // Use morphemes as prefixes to generate MANY categories like:
+  // WORDS THAT START WITH "MEGA": MEGATON, MEGASTAR, etc.
+  const pre = POOLS.MORPHEMES[randInt(POOLS.MORPHEMES.length)].toUpperCase();
+
+  const bases = [
+    "TON","STAR","ARC","ROOM","LINE","PATH","BYTE","CORE","SCOPE","SHIFT","STACK","RIFT","FORM"
+  ];
+
+  const words = pickFourUnique(bases).map(b => (pre + b).toUpperCase());
+
+  return finalizeGroup({
+    title: `WORDS THAT START WITH "${pre}"`,
+    domain: "wordplay",
+    words,
+    proof: (ws) => ws.every(w => w.toUpperCase().startsWith(pre))
+  });
+}
+
+function endsWithFactory(POOLS) {
+  const suf = pickOne(["CRAFT","VERSE","PUNK","CORE","GATE","WAVE","NADO","TIER","LOCK","SPLAIN","DROP"]);
+  const bases = [
+    "STAR","MOON","DREAM","EMBER","PIXEL","RETRO","NEO","VOID","AERO","HYPER","NANO","ULTRA"
+  ];
+  const words = pickFourUnique(bases).map(b => (b + suf).toUpperCase());
+
+  return finalizeGroup({
+    title: `WORDS THAT END WITH "${suf}"`,
+    domain: "wordplay",
+    words,
+    proof: (ws) => ws.every(w => w.toUpperCase().endsWith(suf))
+  });
+}
+
+function addLetterBodyPartsFactory(POOLS) {
+  const parts = pickFourUnique(POOLS.BODY_PARTS).map(x => x.toUpperCase());
+  const letter = POOLS.LETTERS[randInt(POOLS.LETTERS.length)];
+  const words = parts.map(p => injectLetter(p, letter));
+
+  return finalizeGroup({
+    title: `ADD "${letter}" SOMEWHERE IN A BODY PART`,
+    domain: "wordplay",
+    words,
+    proof: (ws, POOLS) => {
+      // Each is body part + one letter (anagram-ish) in any position.
+      const baseSet = new Set(parts);
+      return ws.every(w => {
+        const upper = w.toUpperCase();
+        // Remove one instance of the chosen letter and see if it becomes a body part
+        const idx = upper.indexOf(letter);
+        if (idx === -1) return false;
+        const removed = upper.slice(0, idx) + upper.slice(idx + 1);
+        return baseSet.has(removed);
+      });
+    }
+  });
+}
+
+function morphemeMashFactory(POOLS) {
+  const a = POOLS.MORPHEMES[randInt(POOLS.MORPHEMES.length)].toUpperCase();
+  let b = POOLS.MORPHEMES[randInt(POOLS.MORPHEMES.length)].toUpperCase();
+  let tries = 0;
+  while (b === a && tries++ < 10) b = POOLS.MORPHEMES[randInt(POOLS.MORPHEMES.length)].toUpperCase();
+
+  const tails = ["BLADE","CAST","SHIFT","RIFT","BORN","BOUND","FALL","FORGE","KIND","SPAWN","GLYPH","WALK"];
+  const words = pickFourUnique(tails).map(t => (a + b.slice(0, 2) + t).toUpperCase());
+
+  return finalizeGroup({
+    title: `MORPHEME MASHUPS (BUILT FROM "${a}" + "${b}")`,
+    domain: "wordplay",
+    words,
+    proof: (ws) => ws.every(w => w.toUpperCase().includes(a) || w.toUpperCase().startsWith(a))
+  });
+}
+
+function crossDomainBaitFactory(POOLS) {
+  // Hard but fair: words that can “feel” like multiple things,
+  // but the category is precise.
+  // Example: “WORDS THAT ARE BOTH A VERB AND A NOUN”
+  const set = [
+    "PATCH","RING","PLANE","BAIT","LURK","SPAWN","GRIND","DRIP","STACK","SHIFT"
+  ].map(x => x.toUpperCase());
+
+  const words = pickFourUnique(set);
+
+  return finalizeGroup({
+    title: "WORDS THAT WORK AS BOTH VERBS AND NOUNS",
+    domain: "linguistics",
+    words,
+    proof: (ws) => ws.every(w => set.includes(w.toUpperCase()))
+  });
+}
+
+/* ------------------------- Fresh pulls (optional) ------------------------- */
+
+async function maybeFetchFreshTokens(config) {
+  if (Math.random() > config.freshChance) return [];
+
+  // Keep it simple + fast: Datamuse “random-ish” via topics
+  // (If it fails, we silently ignore.)
+  const topics = ["movies", "gaming", "internet", "mythology", "science", "music", "sports", "slang"];
+  const topic = topics[randInt(topics.length)];
+
+  try {
+    const url = `https://api.datamuse.com/words?topics=${encodeURIComponent(topic)}&max=80`;
+    const res = await fetch(url, { headers: { "accept": "application/json" } });
     if (!res.ok) return [];
     const data = await res.json();
-    const labels = (data?.results?.bindings || [])
-      .map((b) => b?.itemLabel?.value)
-      .filter(Boolean)
-      .map((s) => s.trim())
-      .filter((s) => /^[A-Za-z][A-Za-z\s\-]{1,20}$/.test(s)) // keep it tile-friendly
-      .map((s) => s.toUpperCase())
-      .filter((s) => s.length <= WORD_MAX);
-    // De-dup
-    return [...new Set(labels)];
+    const words = (Array.isArray(data) ? data : [])
+      .map(x => String(x?.word || "").trim())
+      .filter(w => w && w.length <= 14)
+      .slice(0, 60)
+      .map(w => w.toUpperCase());
+
+    // De-dupe
+    return [...new Set(words)].slice(0, 60);
   } catch {
     return [];
   }
 }
 
-function genFromWikidata(labels, id) {
-  // Make a fair category: "FOUR REAL-WORLD NAMES" is not fair.
-  // So we do a category that is self-contained: "FOUR SINGLE-WORD PROPER NOUNS"
-  // It's still knowledge-based, but coherent and not invisible.
-  const pool = labels.filter((s) => s.split(/\s+/).length === 1);
-  if (pool.length < 20) return null;
-  const words = shuffle(pool).slice(0, 4).map(uniqUpper);
-  return makeCategory(id, "PROPER NOUNS (WIKIDATA PULL)", words);
+/* ------------------------- Difficulty config ------------------------- */
+
+function difficultyConfig(level) {
+  // Higher difficulty: more candidates, more wordplay, more overlap allowed, more fresh pulls.
+  const base = {
+    level,
+    candidateCount: 900, // this is what makes the “pool” feel huge
+    freshChance: 0.15,
+    allowWordOverlap: false,
+    maxOverlapAcrossGroups: 0,
+    allowDomainRepeats: false,
+  };
+
+  if (level === 1) return { ...base, candidateCount: 700, freshChance: 0.05 };
+  if (level === 2) return { ...base, candidateCount: 850, freshChance: 0.08 };
+  if (level === 3) return { ...base, candidateCount: 1000, freshChance: 0.12, allowWordOverlap: true, maxOverlapAcrossGroups: 1 };
+  if (level === 4) return { ...base, candidateCount: 1200, freshChance: 0.18, allowWordOverlap: true, maxOverlapAcrossGroups: 1 };
+  return { ...base, candidateCount: 1500, freshChance: 0.25, allowWordOverlap: true, maxOverlapAcrossGroups: 2, allowDomainRepeats: true };
 }
 
-// ---------------------------
-// Category bank + weighting
-// ---------------------------
+function groupScore(g, config) {
+  // Prefer:
+  // - wordplay + linguistics + multi-step patterns
+  // - longer titles on brutal
+  // - “domain variety”
+  let s = 0;
+  if (g.domain === "wordplay") s += 40;
+  if (g.domain === "linguistics") s += 25;
+  if (g.domain === "science") s += 20;
+  if (g.domain === "fantasy") s += 15;
+  if (g.domain === "fresh") s += 30;
 
-const BANK = [
-  { id: "HOMOPHONE_PAIRS", w: 8, fn: genHomophonePairs },
-  { id: "PORTMANTEAUS", w: 6, fn: genPortmanteau },
-  { id: "LOGIC", w: 6, fn: genLogicSet },
-  { id: "RHETORIC", w: 6, fn: genRhetoricSet },
-  { id: "GREEK", w: 6, fn: genGreekLetters },
-  { id: "COMIC_CANON", w: 6, fn: genComicCanon },
-  { id: "GAME_TERMS", w: 6, fn: genGameTerms },
-  { id: "MINECRAFT", w: 6, fn: genMinecraftSet },
-  { id: "WEAPONS", w: 5, fn: genWeapons },
-  { id: "SI_BASE", w: 5, fn: genSIBase },
-  { id: "CHEM_SYMBOLS", w: 5, fn: genChemSymbols },
-  { id: "ASTRONOMY", w: 5, fn: genAstronomy },
-  { id: "PALINDROMES", w: 4, fn: genPalindrome-ish },
-  { id: "ONE_LETTER_OFF", w: 6, fn: genOneLetterOff },
-  { id: "STARTS_MEGA", w: 4, fn: genStartsWithMega },
-  { id: "ENDS_CRAFT", w: 4, fn: genEndsWithCraft },
-  { id: "SLANG", w: 6, fn: genSlangSet },
-  { id: "HIDDEN_WORD", w: 7, fn: genHiddenWord },
-];
+  s += Math.min(20, Math.floor(g.title.length / 8));
 
-// Weighted choice with exclusion
-function weightedPick(exclusions = new Set()) {
-  const options = BANK.filter((x) => !exclusions.has(x.id));
-  const total = options.reduce((a, b) => a + b.w, 0);
-  let r = Math.random() * total;
-  for (const opt of options) {
-    r -= opt.w;
-    if (r <= 0) return opt;
+  // Brutal likes chaos
+  if (config.level >= 5) s += randInt(15);
+  return s;
+}
+
+/* ------------------------- Utilities ------------------------- */
+
+function finalizeGroup({ title, domain, words, proof }) {
+  const cleaned = words.map(w => String(w).trim().toUpperCase());
+  const key = makeKey(title, cleaned);
+  return { title, domain, words: cleaned, key, proof };
+}
+
+function makeKey(title, words) {
+  // Stable ID for "seen history"
+  const raw = (title + "::" + words.slice().sort().join("|")).toUpperCase();
+  let h = 2166136261;
+  for (let i = 0; i < raw.length; i++) {
+    h ^= raw.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
-  return options[options.length - 1];
+  return "g_" + (h >>> 0).toString(16);
 }
 
-// ---------------------------
-// Puzzle assembly + strict fairness
-// ---------------------------
+function pickFourUnique(pool) {
+  const arr = Array.isArray(pool) ? pool.slice() : Array.from(pool);
+  shuffleInPlace(arr);
+  return arr.slice(0, 4).map(x => String(x).trim().toUpperCase());
+}
 
-function scoreOverlap(groups) {
-  // Counts how many tiles could plausibly fit multiple groups by naive heuristics.
-  // We want more overlap at higher difficulty, but still valid groups.
-  const allWords = groups.flatMap((g) => g.words);
-  const counts = new Map();
-  for (const w of allWords) counts.set(w, (counts.get(w) || 0) + 1);
-  // duplicates should be zero; if any duplicates, overlap score is max (bad)
-  const dup = [...counts.values()].some((c) => c > 1);
-  if (dup) return 999;
+function pickOne(arr) {
+  const a = Array.isArray(arr) ? arr : Array.from(arr);
+  return a[randInt(a.length)];
+}
 
-  // Soft overlap heuristics: shared prefixes/suffixes across groups
-  const prefix2 = (w) => w.replace(/\s+/g, "").slice(0, 2);
-  const suffix2 = (w) => w.replace(/\s+/g, "").slice(-2);
-  let overlaps = 0;
-  const seenP = new Map();
-  const seenS = new Map();
-  for (const w of allWords) {
-    const p = prefix2(w);
-    const s = suffix2(w);
-    seenP.set(p, (seenP.get(p) || 0) + 1);
-    seenS.set(s, (seenS.get(s) || 0) + 1);
+function injectLetter(word, letter) {
+  // Insert letter at a random non-edge position to keep it readable-ish
+  const w = word.toUpperCase();
+  const pos = clampInt(randInt(w.length + 1), 1, w.length - 1, 1);
+  return (w.slice(0, pos) + letter + w.slice(pos)).toUpperCase();
+}
+
+function randInt(n) { return Math.floor(Math.random() * n); }
+
+function shuffleInPlace(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = randInt(i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
   }
-  for (const v of seenP.values()) if (v >= 3) overlaps += 1;
-  for (const v of seenS.values()) if (v >= 3) overlaps += 1;
-  return overlaps;
+  return a;
 }
 
-function validatePuzzle(groups) {
-  if (groups.length !== 4) return false;
-
-  // all words must be unique + tile-safe
-  const all = groups.flatMap((g) => g.words.map(uniqUpper));
-  if (all.length !== 16) return false;
-
-  const set = new Set(all);
-  if (set.size !== 16) return false;
-
-  // avoid ultra-long words
-  if (all.some((w) => w.length > WORD_MAX)) return false;
-
-  return true;
+function clampInt(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-// Colors by difficulty; harder = more likely BLUE/PURPLE are evil
-const COLOR_ORDER = ["YELLOW", "GREEN", "BLUE", "PURPLE"];
-
-function difficultyConfig(difficulty) {
-  // difficulty 1: simplest categories, less overlap pressure
-  // difficulty 5: maximum overlap bait + more wordplay categories
+function corsHeaders() {
   return {
-    attempts: 40 + difficulty * 10,
-    overlapTarget: difficulty <= 2 ? 0 : difficulty === 3 ? 1 : difficulty === 4 ? 2 : 3,
-    allowWikidata: difficulty >= 4, // optional spice
-    wikidataChance: difficulty >= 5 ? 0.35 : difficulty >= 4 ? 0.2 : 0.0,
-    preferWordplay: difficulty >= 4,
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
   };
 }
 
-async function buildPuzzle(difficulty, seenWordsSet, seenCatsSet) {
-  const cfg = difficultyConfig(difficulty);
-
-  // Preload Wikidata sometimes (non-blocking failure)
-  let wikidataLabels = [];
-  if (cfg.allowWikidata && Math.random() < cfg.wikidataChance) {
-    wikidataLabels = await fetchWikidataLabels(60);
-  }
-
-  for (let attempt = 0; attempt < cfg.attempts; attempt++) {
-    const usedCats = new Set();
-    const groups = [];
-
-    // optionally exclude recently seen categories
-    const catExclusions = new Set(seenCatsSet || []);
-    // build 4 groups
-    while (groups.length < 4) {
-      const opt = weightedPick(new Set([...usedCats, ...catExclusions]));
-      let g = opt.fn(opt.id);
-
-      // Wikidata slot sometimes replaces a mid group, but only if it succeeds
-      if (!g && opt.id === "WIKIDATA") continue;
-
-      // Sometimes add Wikidata as an extra option
-      if (!g && wikidataLabels.length && Math.random() < 0.15) {
-        g = genFromWikidata(wikidataLabels, "WIKIDATA");
-      } else if (!g && wikidataLabels.length && groups.length === 2 && Math.random() < 0.25) {
-        g = genFromWikidata(wikidataLabels, "WIKIDATA");
-      }
-
-      if (!g) continue;
-
-      // normalize + reject seen words to reduce repeats (best effort)
-      g.words = normalizeWords(g.words);
-      if (g.words.length !== 4) continue;
-      if (g.words.some((w) => seenWordsSet.has(w))) continue;
-
-      usedCats.add(opt.id);
-      groups.push(g);
-    }
-
-    // strict validation
-    if (!validatePuzzle(groups)) continue;
-
-    // overlap tuning: keep overlap at/near target
-    const overlapScore = scoreOverlap(groups);
-    const target = cfg.overlapTarget;
-    // We accept if within 1 of target; higher difficulty wants more overlap.
-    if (Math.abs(overlapScore - target) > 1) continue;
-
-    // assign standard NYT-ish colors in order, but shuffle which category gets which
-    const colors = shuffle([...COLOR_ORDER]);
-    const colored = groups.map((g, i) => ({
-      color: colors[i],
-      category: g.category,
-      words: g.words,
-      _id: g.id,
-    }));
-
-    // Build tiles and shuffle
-    const tiles = shuffle(
-      colored.flatMap((g, gi) => g.words.map((w) => ({ word: w, groupIndex: gi })))
-    );
-
-    return { groups: colored, tiles };
-  }
-
-  // last-resort fallback: just make something valid even if overlap isn't perfect
-  const fallbackGroups = [
-    genHomophonePairs("HOMOPHONE_PAIRS"),
-    genPortmanteau("PORTMANTEAUS"),
-    genGameTerms("GAME_TERMS"),
-    genLogicSet("LOGIC"),
-  ].map((g, i) => ({
-    color: COLOR_ORDER[i],
-    category: g.category,
-    words: g.words.map(uniqUpper),
-    _id: g.id,
-  }));
-
-  const tiles = shuffle(
-    fallbackGroups.flatMap((g, gi) => g.words.map((w) => ({ word: w, groupIndex: gi })))
-  );
-
-  return { groups: fallbackGroups, tiles };
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj, null, 2), {
+    status,
+    headers: {
+      ...corsHeaders(),
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }
 
-// ---------------------------
-// CF Pages Function entry
-// ---------------------------
-
-export async function onRequest(context) {
-  const { request } = context;
-  const u = new URL(request.url);
-
-  const difficulty = clampInt(u.searchParams.get("difficulty"), 1, 5, 4);
-
-  const seenWords = (u.searchParams.get("seen") || "")
-    .split(",")
-    .map(uniqUpper)
-    .filter(Boolean);
-
-  const seenCats = (u.searchParams.get("seenCats") || "")
-    .split(",")
-    .map((s) => String(s || "").trim())
-    .filter(Boolean);
-
-  const seenWordsSet = new Set(seenWords);
-  const seenCatsSet = new Set(seenCats);
-
-  const puzzle = await buildPuzzle(difficulty, seenWordsSet, seenCatsSet);
-  return json(puzzle);
+async function safeJson(request) {
+  try {
+    if (request.method === "GET") return {};
+    const text = await request.text();
+    if (!text) return {};
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
 }
